@@ -45,10 +45,13 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          if git diff --quiet -- web/public/data; then
+          # Stage primeiro e comparar o índice: `git diff` sozinho não vê
+          # arquivo novo (untracked), e na primeira coleta o JSON é justamente
+          # um arquivo novo — o job passaria verde jogando a coleta no lixo.
+          git add web/public/data
+          if git diff --cached --quiet; then
             echo "Sem mudanças na coleta."
           else
-            git add web/public/data
             git commit -m "chore(coleta): atualiza licitacoes.json"
             # rebase antes: se alguém empurrou algo entre o checkout e agora,
             # o push seria rejeitado e a coleta do dia se perderia
