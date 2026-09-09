@@ -1,9 +1,11 @@
+import { useState } from 'react';
 import {
   Table,
   TableBody,
   TableCell,
   TableContainer,
   TableHead,
+  TablePagination,
   TableRow,
   ToggleButton,
   ToggleButtonGroup,
@@ -49,13 +51,24 @@ function ehNova(visto) {
 }
 
 export default function Tabela({ rows, triagem, setTriagem }) {
+  const [pagina, setPagina] = useState(0);
+  const [porPagina, setPorPagina] = useState(25);
+
+  // Um filtro mais estreito pode encurtar a lista para menos que a página
+  // atual. Limitar em vez de zerar: `rows` também muda a cada clique de
+  // triagem, e resetar jogaria o usuário de volta ao topo toda vez.
+  const ultimaPagina = Math.max(0, Math.ceil(rows.length / porPagina) - 1);
+  const paginaAtual = Math.min(pagina, ultimaPagina);
+  const visiveis = rows.slice(paginaAtual * porPagina, paginaAtual * porPagina + porPagina);
+
   return (
     // tabIndex torna a área rolável alcançável só pelo teclado (WCAG 2.1.1),
     // já que a tabela tem minWidth 900 e rola na horizontal.
     <TableContainer component={Paper} variant="outlined" tabIndex={0} role="region" aria-label="Licitações">
       <Table sx={{ minWidth: 900 }}>
         <caption style={{ position: 'absolute', width: 1, height: 1, overflow: 'hidden', clip: 'rect(0 0 0 0)' }}>
-          Lista de licitações filtradas, ordenadas por prazo de encerramento crescente.
+          Lista de licitações filtradas, ordenadas por prazo de encerramento crescente,
+          {porPagina} por página.
         </caption>
         <TableHead>
           <TableRow>
@@ -68,7 +81,7 @@ export default function Tabela({ rows, triagem, setTriagem }) {
           </TableRow>
         </TableHead>
         <TableBody>
-          {rows.map(({ item, dias }) => {
+          {visiveis.map(({ item, dias }) => {
             const critico = dias <= 3 && dias >= 0;
             const nova = ehNova(item.visto);
             const estado = triagem[item.id] || null;
@@ -195,6 +208,23 @@ export default function Tabela({ rows, triagem, setTriagem }) {
           })}
         </TableBody>
       </Table>
+      <TablePagination
+        component="div"
+        count={rows.length}
+        page={paginaAtual}
+        onPageChange={(_, p) => setPagina(p)}
+        rowsPerPage={porPagina}
+        rowsPerPageOptions={[25, 50, 100]}
+        onRowsPerPageChange={(e) => {
+          setPorPagina(Number(e.target.value));
+          setPagina(0);
+        }}
+        labelRowsPerPage="Linhas por página"
+        labelDisplayedRows={({ from, to, count }) => `${from}–${to} de ${count}`}
+        getItemAriaLabel={(tipo) =>
+          tipo === 'next' ? 'Próxima página' : 'Página anterior'
+        }
+      />
     </TableContainer>
   );
 }

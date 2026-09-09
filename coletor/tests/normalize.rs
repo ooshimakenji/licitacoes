@@ -1,5 +1,5 @@
 use coletor::merge::merge;
-use coletor::pncp::{normalize, ItemPncp, Licitacao};
+use coletor::pncp::{interessa, normalize, ItemPncp, Licitacao};
 
 #[derive(serde::Deserialize)]
 struct RespostaFixture {
@@ -51,6 +51,53 @@ fn merge_preserva_visto_de_registro_ja_conhecido() {
 
     assert_eq!(resultado.len(), 1);
     assert_eq!(resultado[0].visto, "2026-08-01");
+}
+
+#[test]
+fn filtro_do_config_desligado_deixa_tudo_passar() {
+    let lic = exemplo("Coleta de resíduos sólidos urbanos", Some(9_000_000.0));
+
+    assert!(interessa(&lic, None, &[]));
+}
+
+#[test]
+fn filtro_corta_por_teto_de_valor_mas_nao_por_valor_ausente() {
+    let cara = exemplo("obra", Some(2_000_000.0));
+    let barata = exemplo("obra", Some(80_000.0));
+    let sem_valor = exemplo("obra", None);
+
+    assert!(!interessa(&cara, Some(500_000.0), &[]));
+    assert!(interessa(&barata, Some(500_000.0), &[]));
+    // Dispensa quase sempre vem sem valor estimado: reprovar seria perder
+    // justamente o edital pequeno que o radar procura.
+    assert!(interessa(&sem_valor, Some(500_000.0), &[]));
+}
+
+#[test]
+fn filtro_por_palavra_chave_ignora_caixa() {
+    let lic = exemplo("Contratação de COLETA de Resíduos", None);
+
+    assert!(interessa(&lic, None, &["resíduos".to_string()]));
+    assert!(!interessa(&lic, None, &["climatização".to_string()]));
+    // Espaço em branco no config não pode virar um "contains" que casa tudo.
+    assert!(!interessa(&lic, None, &["  ".to_string()]));
+}
+
+fn exemplo(objeto: &str, valor: Option<f64>) -> Licitacao {
+    Licitacao {
+        id: "abc-3".to_string(),
+        objeto: objeto.to_string(),
+        valor,
+        uf: "SP".to_string(),
+        municipio: "Bauru".to_string(),
+        orgao: "orgao".to_string(),
+        modalidade: "Pregão".to_string(),
+        abertura: "2026-09-01T08:00:00".to_string(),
+        encerramento: "2026-09-20T09:00:00".to_string(),
+        link: String::new(),
+        link_pncp: String::new(),
+        visto: String::new(),
+    }
 }
 
 #[test]

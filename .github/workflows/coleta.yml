@@ -16,7 +16,9 @@ concurrency:
 jobs:
   coletar:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Escopo nacional = 2.000+ páginas com 1s obrigatório entre elas: a coleta
+    # leva mais de uma hora, não os 30 min que bastavam para uma UF só.
+    timeout-minutes: 150
     steps:
       - uses: actions/checkout@v4
 
@@ -31,6 +33,13 @@ jobs:
 
       - name: Coletar
         run: cargo run --release --manifest-path coletor/Cargo.toml
+
+      # Os dois números que decidem se a saída precisa ser particionada por UF.
+      - name: Medir a saída
+        run: |
+          arquivo=web/public/data/licitacoes.json
+          echo "- bytes: $(stat -c%s $arquivo)" >> $GITHUB_STEP_SUMMARY
+          echo "- registros: $(grep -o '"id":' $arquivo | wc -l)" >> $GITHUB_STEP_SUMMARY
 
       - name: Commitar se mudou
         run: |

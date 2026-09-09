@@ -107,6 +107,29 @@ pub fn normalize(item: &ItemPncp) -> Licitacao {
     }
 }
 
+/// Filtro opcional da coleta (`valor_max` e `palavras_chave` no `config.json`).
+/// Nasce desligado — teto ausente e lista vazia deixam tudo passar.
+pub fn interessa(lic: &Licitacao, valor_max: Option<f64>, palavras: &[String]) -> bool {
+    // Valor ausente não reprova: dispensa costuma vir sem valor estimado e
+    // descartar por isso jogaria fora justamente o edital pequeno.
+    if let (Some(teto), Some(valor)) = (valor_max, lic.valor) {
+        if valor > teto {
+            return false;
+        }
+    }
+
+    if palavras.is_empty() {
+        return true;
+    }
+
+    // ponytail: comparação sem normalizar acento — "residuo" não casa "resíduo".
+    // Upgrade: normalização Unicode se aparecer falso-negativo real na tela.
+    let objeto = lic.objeto.to_lowercase();
+    palavras
+        .iter()
+        .any(|p| !p.trim().is_empty() && objeto.contains(p.trim().to_lowercase().as_str()))
+}
+
 fn data_final(dias_a_frente: i64) -> Result<String, Box<dyn Error>> {
     let hoje = time::OffsetDateTime::now_utc().date();
     let alvo = hoje + time::Duration::days(dias_a_frente);
@@ -129,8 +152,17 @@ pub fn buscar(ufs: &[String], modalidades: &[u32], dias_a_frente: i64) -> (Vec<L
         }
     };
 
+    // Lista de UFs vazia = Brasil inteiro. `uf` é opcional na API, e omiti-lo
+    // troca 27 varreduras por 1: cada registro traz a própria UF em
+    // `unidadeOrgao.ufSigla`, então a tela não perde nada.
+    let alvos: Vec<Option<&str>> = if ufs.is_empty() {
+        vec![None]
+    } else {
+        ufs.iter().map(|uf| Some(uf.as_str())).collect()
+    };
+
     let mut primeira = true;
-    for uf in ufs {
+    for uf in alvos {
         for &modalidade in modalidades {
             // O intervalo vale entre combinações também, não só entre páginas:
             // com 27 UFs seriam dezenas de requisições coladas.
@@ -140,7 +172,10 @@ pub fn buscar(ufs: &[String], modalidades: &[u32], dias_a_frente: i64) -> (Vec<L
             primeira = false;
 
             if let Err(e) = buscar_uf_modalidade(uf, modalidade, &data_final, &mut licitacoes) {
-                erros.push(format!("uf={uf} modalidade={modalidade}: {e}"));
+                erros.push(format!(
+                    "uf={} modalidade={modalidade}: {e}",
+                    uf.unwrap_or("BR")
+                ));
             }
         }
     }
@@ -157,22 +192,61 @@ fn agente() -> ureq::Agent {
         .build()
 }
 
+/// Repete a mesma página até 3 vezes. Os dois modos de falha do PNCP pedem
+/// esperas bem diferentes: `5xx` ("Erro na comunicação com o banco de dados")
+/// passa em segundos, enquanto timeout é o bloqueio de IP por rajada, que só
+/// sai depois de ~3 min — insistir em segundos apenas renova o bloqueio.
+/// `4xx` é parâmetro inválido nosso: repetir não conserta.
+fn chamar(montar: impl Fn() -> ureq::Request) -> Result<ureq::Response, Box<dyn Error>> {
+    for tentativa in 0..3 {
+        let erro = match montar().call() {
+            Ok(resposta) => return Ok(resposta),
+            Err(e) => e,
+        };
+
+        let espera = match &erro {
+            ureq::Error::Status(codigo, _) if *codigo >= 500 => {
+                if tentativa == 0 {
+                    5
+                } else {
+                    30
+                }
+            }
+            ureq::Error::Transport(_) if tentativa == 0 => 180,
+            _ => return Err(Box::new(erro)),
+        };
+
+        if tentativa == 2 {
+            return Err(Box::new(erro));
+        }
+
+        eprintln!("aviso: {erro} — nova tentativa em {espera}s");
+        thread::sleep(Duration::from_secs(espera));
+    }
+
+    unreachable!("o laço sempre retorna na última tentativa")
+}
+
 fn buscar_uf_modalidade(
-    uf: &str,
+    uf: Option<&str>,
     modalidade: u32,
     data_final: &str,
     licitacoes: &mut Vec<Licitacao>,
 ) -> Result<(), Box<dyn Error>> {
     let mut pagina = 1u32;
     loop {
-        let http = agente()
-            .get(BASE_URL)
-            .query("dataFinal", data_final)
-            .query("codigoModalidadeContratacao", &modalidade.to_string())
-            .query("pagina", &pagina.to_string())
-            .query("tamanhoPagina", &TAMANHO_PAGINA.to_string())
-            .query("uf", uf)
-            .call()?;
+        let http = chamar(|| {
+            let req = agente()
+                .get(BASE_URL)
+                .query("dataFinal", data_final)
+                .query("codigoModalidadeContratacao", &modalidade.to_string())
+                .query("pagina", &pagina.to_string())
+                .query("tamanhoPagina", &TAMANHO_PAGINA.to_string());
+            match uf {
+                Some(uf) => req.query("uf", uf),
+                None => req,
+            }
+        })?;
 
         // Sem resultados o PNCP responde 204 com corpo vazio (acontece com
         // inexigibilidade, que raramente tem proposta aberta) — não é erro.

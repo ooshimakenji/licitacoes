@@ -14,6 +14,11 @@ struct Config {
     dias_a_frente: i64,
     manter_vencidas_por_dias: i64,
     saida: String,
+    // Filtros opcionais da coleta: ausentes ou vazios, nada é descartado.
+    #[serde(default)]
+    valor_max: Option<f64>,
+    #[serde(default)]
+    palavras_chave: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -59,6 +64,10 @@ fn executar() -> Result<(), Box<dyn Error>> {
     let mut ids_vistos = HashSet::new();
     novas.retain(|lic| ids_vistos.insert(lic.id.clone()));
 
+    let coletadas = novas.len();
+    novas.retain(|lic| pncp::interessa(lic, config.valor_max, &config.palavras_chave));
+    eprintln!("coletadas: {coletadas} — após filtro do config: {}", novas.len());
+
     let caminho_saida = raiz.join(&config.saida);
     // Arquivo ilegível é erro, não "começar do zero": engolir isso resetaria
     // todo o `visto` e descartaria os editais que já sumiram da API.
@@ -82,7 +91,15 @@ fn executar() -> Result<(), Box<dyn Error>> {
     if let Some(pai) = caminho_saida.parent() {
         fs::create_dir_all(pai)?;
     }
-    fs::write(&caminho_saida, serde_json::to_string_pretty(&saida)?)?;
+    // Minificado: o arquivo é consumido por máquina e pode passar de dezenas de
+    // MB no escopo nacional — indentar só engorda o download da tela.
+    fs::write(&caminho_saida, serde_json::to_string(&saida)?)?;
+    eprintln!(
+        "gravadas: {} — {} bytes em {}",
+        saida.licitacoes.len(),
+        fs::metadata(&caminho_saida)?.len(),
+        caminho_saida.display()
+    );
 
     Ok(())
 }
