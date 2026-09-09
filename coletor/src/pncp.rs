@@ -7,7 +7,9 @@ use std::thread;
 use std::time::Duration;
 
 const BASE_URL: &str = "https://pncp.gov.br/api/consulta/v1/contratacoes/proposta";
-const TAMANHO_PAGINA: u32 = 500;
+// O manual do PNCP diz máximo 500, mas a API real responde 400 "Tamanho de
+// página inválido" acima de 50 (testado em 09/09/2026: 51 já reprova).
+const TAMANHO_PAGINA: u32 = 50;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -19,7 +21,10 @@ struct RespostaPncp {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ItemPncp {
-    pub objeto_compra: String,
+    // Todo texto vindo da API é Option: a desserialização é da página inteira,
+    // então um único campo null derrubaria os outros 49 registros junto.
+    #[serde(default)]
+    pub objeto_compra: Option<String>,
     pub valor_total_estimado: Option<f64>,
     // Campos que a API às vezes devolve null (ou omite) em dispensa e
     // inexigibilidade: um único item assim derrubaria a página inteira.
@@ -33,7 +38,8 @@ pub struct ItemPncp {
     pub numero_controle_pncp: String,
     pub ano_compra: i32,
     pub sequencial_compra: u64,
-    pub modalidade_nome: String,
+    #[serde(default)]
+    pub modalidade_nome: Option<String>,
     #[serde(default)]
     pub link_sistema_origem: Option<String>,
 }
@@ -41,15 +47,19 @@ pub struct ItemPncp {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UnidadeOrgao {
-    pub uf_sigla: String,
-    pub municipio_nome: String,
+    #[serde(default)]
+    pub uf_sigla: Option<String>,
+    #[serde(default)]
+    pub municipio_nome: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OrgaoEntidade {
-    pub razao_social: String,
-    pub cnpj: String,
+    #[serde(default)]
+    pub razao_social: Option<String>,
+    #[serde(default)]
+    pub cnpj: Option<String>,
 }
 
 /// Contrato final consumido pela SPA (`web/`). Nomes de campo em snake_case
@@ -75,19 +85,20 @@ pub struct Licitacao {
 pub fn normalize(item: &ItemPncp) -> Licitacao {
     // Pegadinha: o link usa o sequencial SEM zeros à esquerda, diferente do
     // id (numeroControlePNCP), que mantém o formato original com zeros.
+    let cnpj = item.orgao_entidade.cnpj.clone().unwrap_or_default();
     let link_pncp = format!(
         "https://pncp.gov.br/app/editais/{}/{}/{}",
-        item.orgao_entidade.cnpj, item.ano_compra, item.sequencial_compra
+        cnpj, item.ano_compra, item.sequencial_compra
     );
 
     Licitacao {
         id: item.numero_controle_pncp.clone(),
-        objeto: item.objeto_compra.clone(),
+        objeto: item.objeto_compra.clone().unwrap_or_default(),
         valor: item.valor_total_estimado,
-        uf: item.unidade_orgao.uf_sigla.clone(),
-        municipio: item.unidade_orgao.municipio_nome.clone(),
-        orgao: item.orgao_entidade.razao_social.clone(),
-        modalidade: item.modalidade_nome.clone(),
+        uf: item.unidade_orgao.uf_sigla.clone().unwrap_or_default(),
+        municipio: item.unidade_orgao.municipio_nome.clone().unwrap_or_default(),
+        orgao: item.orgao_entidade.razao_social.clone().unwrap_or_default(),
+        modalidade: item.modalidade_nome.clone().unwrap_or_default(),
         abertura: item.data_abertura_proposta.clone().unwrap_or_default(),
         encerramento: item.data_encerramento_proposta.clone(),
         link: item.link_sistema_origem.clone().unwrap_or_default(),
@@ -118,8 +129,16 @@ pub fn buscar(ufs: &[String], modalidades: &[u32], dias_a_frente: i64) -> (Vec<L
         }
     };
 
+    let mut primeira = true;
     for uf in ufs {
         for &modalidade in modalidades {
+            // O intervalo vale entre combinações também, não só entre páginas:
+            // com 27 UFs seriam dezenas de requisições coladas.
+            if !primeira {
+                thread::sleep(Duration::from_secs(1));
+            }
+            primeira = false;
+
             if let Err(e) = buscar_uf_modalidade(uf, modalidade, &data_final, &mut licitacoes) {
                 erros.push(format!("uf={uf} modalidade={modalidade}: {e}"));
             }
@@ -127,6 +146,15 @@ pub fn buscar(ufs: &[String], modalidades: &[u32], dias_a_frente: i64) -> (Vec<L
     }
 
     (licitacoes, erros)
+}
+
+/// Timeout explícito: sem ele uma conexão pendurada consumiria os 30 minutos
+/// do job no Actions sem gravar nada.
+fn agente() -> ureq::Agent {
+    ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_secs(15))
+        .timeout(Duration::from_secs(60))
+        .build()
 }
 
 fn buscar_uf_modalidade(
@@ -137,18 +165,28 @@ fn buscar_uf_modalidade(
 ) -> Result<(), Box<dyn Error>> {
     let mut pagina = 1u32;
     loop {
-        let resposta: RespostaPncp = ureq::get(BASE_URL)
+        let http = agente()
+            .get(BASE_URL)
             .query("dataFinal", data_final)
             .query("codigoModalidadeContratacao", &modalidade.to_string())
             .query("pagina", &pagina.to_string())
             .query("tamanhoPagina", &TAMANHO_PAGINA.to_string())
             .query("uf", uf)
-            .call()?
-            .into_json()?;
+            .call()?;
+
+        // Sem resultados o PNCP responde 204 com corpo vazio (acontece com
+        // inexigibilidade, que raramente tem proposta aberta) — não é erro.
+        if http.status() == 204 {
+            break;
+        }
+
+        let resposta: RespostaPncp = http.into_json()?;
 
         licitacoes.extend(resposta.data.iter().map(normalize));
 
-        if resposta.paginas_restantes == 0 {
+        // `data` vazio também encerra: se a API errar o `paginasRestantes`,
+        // o laço pararia de qualquer forma em vez de girar para sempre.
+        if resposta.paginas_restantes == 0 || resposta.data.is_empty() {
             break;
         }
 

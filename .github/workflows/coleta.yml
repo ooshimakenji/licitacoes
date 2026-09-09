@@ -41,5 +41,8 @@ jobs:
           else
             git add web/public/data
             git commit -m "chore(coleta): atualiza licitacoes.json"
+            # rebase antes: se alguém empurrou algo entre o checkout e agora,
+            # o push seria rejeitado e a coleta do dia se perderia
+            git pull --rebase --autostash
             git push
           fi

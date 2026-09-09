@@ -66,12 +66,22 @@ export default function App() {
       .catch(() => setStatus('erro'));
   }, []);
 
+  // setItem lança QuotaExceededError (Safari privado, disco cheio) e um throw
+  // dentro do efeito derrubaria a árvore inteira: tela branca.
   useEffect(() => {
-    localStorage.setItem(FILTROS_KEY, JSON.stringify(filtros));
+    try {
+      localStorage.setItem(FILTROS_KEY, JSON.stringify(filtros));
+    } catch {
+      /* filtro não persistido nesta sessão — não vale quebrar a tela */
+    }
   }, [filtros]);
 
   useEffect(() => {
-    localStorage.setItem(TRIAGEM_KEY, JSON.stringify(triagem));
+    try {
+      localStorage.setItem(TRIAGEM_KEY, JSON.stringify(triagem));
+    } catch {
+      /* idem */
+    }
   }, [triagem]);
 
   const ufsDisponiveis = useMemo(
@@ -122,7 +132,13 @@ export default function App() {
         return true;
       })
       .map((item) => ({ item, dias: diasAte(item.encerramento) }))
-      .sort((a, b) => new Date(a.item.encerramento) - new Date(b.item.encerramento));
+      // Encerradas (mantidas por 30 dias como histórico) vão para o fim: por
+      // data crescente elas seriam as primeiras linhas da tela.
+      .sort(
+        (a, b) =>
+          (a.dias < 0) - (b.dias < 0) ||
+          new Date(a.item.encerramento) - new Date(b.item.encerramento),
+      );
   }, [licitacoes, filtros, triagem]);
 
   return (

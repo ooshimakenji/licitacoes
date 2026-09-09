@@ -50,7 +50,9 @@ function ehNova(visto) {
 
 export default function Tabela({ rows, triagem, setTriagem }) {
   return (
-    <TableContainer component={Paper} variant="outlined">
+    // tabIndex torna a área rolável alcançável só pelo teclado (WCAG 2.1.1),
+    // já que a tabela tem minWidth 900 e rola na horizontal.
+    <TableContainer component={Paper} variant="outlined" tabIndex={0} role="region" aria-label="Licitações">
       <Table sx={{ minWidth: 900 }}>
         <caption style={{ position: 'absolute', width: 1, height: 1, overflow: 'hidden', clip: 'rect(0 0 0 0)' }}>
           Lista de licitações filtradas, ordenadas por prazo de encerramento crescente.
@@ -138,17 +140,21 @@ export default function Tabela({ rows, triagem, setTriagem }) {
                         {' '}(abre em nova aba)
                       </Box>
                     </Link>
-                    <Link
-                      href={item.link}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5, minHeight: 44 }}
-                    >
-                      Sistema de origem <OpenInNewIcon fontSize="inherit" aria-hidden="true" />
-                      <Box component="span" sx={visuallyHidden}>
-                        {' '}(abre em nova aba)
-                      </Box>
-                    </Link>
+                    {/* Dispensa e inexigibilidade costumam vir sem link de
+                        origem; href="" recarregaria a própria página. */}
+                    {item.link && (
+                      <Link
+                        href={item.link}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5, minHeight: 44 }}
+                      >
+                        Sistema de origem <OpenInNewIcon fontSize="inherit" aria-hidden="true" />
+                        <Box component="span" sx={visuallyHidden}>
+                          {' '}(abre em nova aba)
+                        </Box>
+                      </Link>
+                    )}
                   </Box>
                 </TableCell>
                 <TableCell>

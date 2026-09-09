@@ -41,11 +41,13 @@ fn executar() -> Result<(), Box<dyn Error>> {
 
     let (mut novas, erros) = pncp::buscar(&config.ufs, &config.modalidades, config.dias_a_frente);
 
-    if novas.is_empty() && !erros.is_empty() {
+    // Coleta vazia é sempre suspeita, com ou sem erro reportado: nunca
+    // sobrescrever um JSON bom com nada.
+    if novas.is_empty() {
         for erro in &erros {
             eprintln!("erro: {erro}");
         }
-        // Coleta inteira falhou: nunca sobrescrever um JSON bom com vazio.
+        eprintln!("erro: coleta não retornou nenhuma licitação — arquivo mantido como estava");
         process::exit(1);
     }
 
@@ -58,10 +60,10 @@ fn executar() -> Result<(), Box<dyn Error>> {
     novas.retain(|lic| ids_vistos.insert(lic.id.clone()));
 
     let caminho_saida = raiz.join(&config.saida);
+    // Arquivo ilegível é erro, não "começar do zero": engolir isso resetaria
+    // todo o `visto` e descartaria os editais que já sumiram da API.
     let anteriores = match fs::read_to_string(&caminho_saida) {
-        Ok(conteudo) => serde_json::from_str::<Saida>(&conteudo)
-            .map(|s| s.licitacoes)
-            .unwrap_or_default(),
+        Ok(conteudo) => serde_json::from_str::<Saida>(&conteudo)?.licitacoes,
         Err(_) => Vec::new(),
     };
 

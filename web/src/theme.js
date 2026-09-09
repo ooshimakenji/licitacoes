@@ -63,11 +63,33 @@ export const theme = createTheme({
     MuiButtonBase: {
       defaultProps: { disableRipple: false },
       styleOverrides: {
-        root: { minWidth: 44, minHeight: 44 }, // AAA 2.5.5 alvo de toque
+        root: {
+          minWidth: 44,
+          minHeight: 44, // AAA 2.5.5 alvo de toque
+          // O ButtonBase do MUI aplica `outline: 0` com a mesma especificidade
+          // da regra global do CssBaseline e vence pela ordem de inserção do
+          // Emotion — sem repetir aqui, botão nenhum teria foco visível.
+          '&:focus-visible': { outline: '3px solid #0B4F6C', outlineOffset: 2 },
+        },
       },
     },
     MuiIconButton: {
       styleOverrides: { root: { minWidth: 44, minHeight: 44 } },
+    },
+    MuiAutocomplete: {
+      styleOverrides: {
+        // Os indicadores do Autocomplete são IconButton: com 44px cada eles
+        // estouram o espaço reservado (65px) e cobrem os chips selecionados.
+        clearIndicator: { minWidth: 'auto', minHeight: 'auto' },
+        popupIndicator: { minWidth: 'auto', minHeight: 'auto' },
+      },
+    },
+    MuiOutlinedInput: {
+      styleOverrides: {
+        // Default do MUI é rgba(0,0,0,0.23) = 1.74:1, reprova em 1.4.11
+        // (contorno de componente precisa de 3:1). #6B7480 = 4.6:1.
+        notchedOutline: { borderColor: '#6B7480' },
+      },
     },
   },
 });

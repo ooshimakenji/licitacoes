@@ -59,5 +59,7 @@ pub fn merge(
 
 fn parse_data(s: &str) -> Option<time::Date> {
     let formato = time::macros::format_description!("[year]-[month]-[day]");
-    time::Date::parse(&s[..10.min(s.len())], formato).ok()
+    // `get` em vez de slice direto: fatiar por byte em texto multibyte entra
+    // em pânico ao cair no meio de um caractere.
+    time::Date::parse(s.get(..10).unwrap_or(s), formato).ok()
 }
