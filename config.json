@@ -1,0 +1,7 @@
+{
+  "ufs": ["SP"],
+  "modalidades": [6, 8, 9],
+  "dias_a_frente": 365,
+  "manter_vencidas_por_dias": 30,
+  "saida": "web/public/data/licitacoes.json"
+}

@@ -1,0 +1,45 @@
+name: coleta
+
+on:
+  schedule:
+    # 09:00 UTC = 06:00 BRT, dias úteis
+    - cron: "0 9 * * 1-5"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: coleta
+  cancel-in-progress: false
+
+jobs:
+  coletar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          workspaces: coletor
+
+      - name: Testes do coletor
+        working-directory: coletor
+        run: cargo test --release
+
+      - name: Coletar
+        run: cargo run --release --manifest-path coletor/Cargo.toml
+
+      - name: Commitar se mudou
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet -- web/public/data; then
+            echo "Sem mudanças na coleta."
+          else
+            git add web/public/data
+            git commit -m "chore(coleta): atualiza licitacoes.json"
+            git push
+          fi
