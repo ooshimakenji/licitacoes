@@ -50,6 +50,7 @@ function diasAte(iso) {
 export default function App() {
   const [status, setStatus] = useState('carregando'); // carregando | ok | erro
   const [licitacoes, setLicitacoes] = useState([]);
+  const [avisos, setAvisos] = useState([]);
   const [filtros, setFiltros] = useState(() => lerLocalStorage(FILTROS_KEY, FILTROS_PADRAO));
   const [triagem, setTriagem] = useState(() => lerLocalStorage(TRIAGEM_KEY, {}));
 
@@ -61,6 +62,7 @@ export default function App() {
       })
       .then((d) => {
         setLicitacoes(d.licitacoes || []);
+        setAvisos(d.avisos || []);
         setStatus('ok');
       })
       .catch(() => setStatus('erro'));
@@ -177,6 +179,19 @@ export default function App() {
 
           {status === 'ok' && (
             <>
+              {/* Coleta parcial precisa aparecer: sem isso a ausência de uma
+                  modalidade inteira passa por "não há licitações hoje". */}
+              {avisos.length > 0 && (
+                <Alert severity="warning" sx={{ mb: 2 }}>
+                  Coleta incompleta — a lista abaixo pode estar faltando editais:
+                  <Box component="ul" sx={{ m: 0, pl: 3 }}>
+                    {avisos.map((aviso) => (
+                      <li key={aviso}>{aviso}</li>
+                    ))}
+                  </Box>
+                </Alert>
+              )}
+
               <Filtros
                 ufsDisponiveis={ufsDisponiveis}
                 modalidadesDisponiveis={modalidadesDisponiveis}

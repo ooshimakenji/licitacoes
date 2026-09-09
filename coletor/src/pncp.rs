@@ -172,9 +172,14 @@ pub fn buscar(ufs: &[String], modalidades: &[u32], dias_a_frente: i64) -> (Vec<L
             primeira = false;
 
             if let Err(e) = buscar_uf_modalidade(uf, modalidade, &data_final, &mut licitacoes) {
+                // Detalhe técnico vai para o log do job; a mensagem curta vai
+                // para o JSON e aparece na tela. Uma modalidade inteira que
+                // falha (o pregão sumiu assim em 09/09/2026) não pode passar
+                // como se a coleta estivesse completa.
+                eprintln!("erro: uf={} modalidade={modalidade}: {e}", uf.unwrap_or("BR"));
                 erros.push(format!(
-                    "uf={} modalidade={modalidade}: {e}",
-                    uf.unwrap_or("BR")
+                    "modalidade {modalidade}{} não foi coletada nesta execução: a API do PNCP falhou",
+                    uf.map(|u| format!(" em {u}")).unwrap_or_default()
                 ));
             }
         }
@@ -188,43 +193,44 @@ pub fn buscar(ufs: &[String], modalidades: &[u32], dias_a_frente: i64) -> (Vec<L
 fn agente() -> ureq::Agent {
     ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(15))
-        .timeout(Duration::from_secs(60))
+        // 120s porque o PNCP lento responde (mesmo que com erro) em 30-70s:
+        // com 60s o coletor desistia antes de o servidor terminar.
+        .timeout(Duration::from_secs(120))
         .build()
 }
 
-/// Repete a mesma página até 3 vezes. Os dois modos de falha do PNCP pedem
-/// esperas bem diferentes: `5xx` ("Erro na comunicação com o banco de dados")
-/// passa em segundos, enquanto timeout é o bloqueio de IP por rajada, que só
-/// sai depois de ~3 min — insistir em segundos apenas renova o bloqueio.
-/// `4xx` é parâmetro inválido nosso: repetir não conserta.
+// Os dois modos de falha do PNCP pedem esperas bem diferentes. `5xx`/`504` é o
+// servidor deles engasgando — em 09/09/2026 o portal passou a noite devolvendo
+// 500 depois de 30-50s e 504 depois de 70s, e voltou sozinho. Timeout é o
+// bloqueio de IP por rajada, que só sai depois de ~3 min: insistir em segundos
+// apenas renova o bloqueio.
+const ESPERA_5XX: [u64; 3] = [5, 30, 120];
+const ESPERA_TIMEOUT: [u64; 2] = [180, 300];
+
+/// Repete a mesma página enquanto houver espera prevista para aquele tipo de
+/// falha. `4xx` é parâmetro inválido nosso: repetir não conserta.
 fn chamar(montar: impl Fn() -> ureq::Request) -> Result<ureq::Response, Box<dyn Error>> {
-    for tentativa in 0..3 {
+    let mut tentativa = 0usize;
+    loop {
         let erro = match montar().call() {
             Ok(resposta) => return Ok(resposta),
             Err(e) => e,
         };
 
         let espera = match &erro {
-            ureq::Error::Status(codigo, _) if *codigo >= 500 => {
-                if tentativa == 0 {
-                    5
-                } else {
-                    30
-                }
-            }
-            ureq::Error::Transport(_) if tentativa == 0 => 180,
-            _ => return Err(Box::new(erro)),
+            ureq::Error::Status(codigo, _) if *codigo >= 500 => ESPERA_5XX.get(tentativa),
+            ureq::Error::Transport(_) => ESPERA_TIMEOUT.get(tentativa),
+            _ => None,
         };
 
-        if tentativa == 2 {
+        let Some(&espera) = espera else {
             return Err(Box::new(erro));
-        }
+        };
 
         eprintln!("aviso: {erro} — nova tentativa em {espera}s");
         thread::sleep(Duration::from_secs(espera));
+        tentativa += 1;
     }
-
-    unreachable!("o laço sempre retorna na última tentativa")
 }
 
 fn buscar_uf_modalidade(

@@ -24,6 +24,10 @@ struct Config {
 #[derive(Debug, Serialize, Deserialize)]
 struct Saida {
     gerado_em: String,
+    // O que faltou nesta execução. A tela mostra isso: coleta parcial exibida
+    // como se fosse completa é pior que coleta nenhuma.
+    #[serde(default)]
+    avisos: Vec<String>,
     licitacoes: Vec<Licitacao>,
 }
 
@@ -85,6 +89,7 @@ fn executar() -> Result<(), Box<dyn Error>> {
 
     let saida = Saida {
         gerado_em: time::OffsetDateTime::now_utc().format(&time::format_description::well_known::Rfc3339)?,
+        avisos: erros,
         licitacoes,
     };
 
