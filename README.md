@@ -17,8 +17,19 @@ cargo run --manifest-path coletor/Cargo.toml
 cd web && npm install && npm run dev
 ```
 
-Filtros de coleta ficam em `config.json` (UFs e modalidades). Os filtros de *visualização*
-(valor, palavras-chave, prazo) ficam na própria tela e são salvos no navegador.
+Filtros de coleta ficam em `config.json`. Os filtros de *visualização* (valor, palavras-chave,
+prazo) ficam na própria tela e são salvos no navegador.
+
+| campo | efeito |
+|---|---|
+| `ufs` | lista vazia = **Brasil inteiro** (o `uf` é opcional na API e omiti-lo troca 27 varreduras por 1) |
+| `modalidades` | ids do PNCP (tabela abaixo) |
+| `dias_a_frente` | janela de encerramento das propostas |
+| `manter_vencidas_por_dias` | quanto tempo um edital encerrado continua na tela como histórico |
+| `valor_max` | teto opcional; `null` não filtra. Valor **ausente** nunca reprova — dispensa quase sempre vem sem valor estimado |
+| `palavras_chave` | lista opcional; vazia não filtra. Casa contra o objeto, sem diferenciar maiúsculas |
+
+Os dois últimos nascem desligados de propósito: primeiro ver o volume geral, depois cortar.
 
 ### Modalidades PNCP
 
