@@ -272,6 +272,13 @@ const ESPERA_SEGUNDA_PASSADA: u64 = 300;
 /// está fora — e aí insistir só queima o orçamento das que ainda podem dar certo.
 const FALHAS_PARA_DESISTIR: u32 = 3;
 
+/// Paciência da primeira passada, por combinação. Curta de propósito: com 21
+/// combinações, esperar minutos em cada uma consome o orçamento antes de
+/// chegar nas últimas UFs — foi o que aconteceu no run 34538114887, que gastou
+/// 45 min nas primeiras e pulou o resto. Primeiro cobre-se tudo depressa;
+/// a paciência fica para a segunda passada, que só refaz o que faltou.
+const PACIENCIA_PRIMEIRA_PASSADA: u64 = 45;
+
 pub fn buscar(
     ufs: &[String],
     modalidades: &[u32],
@@ -317,11 +324,11 @@ pub fn buscar(
             }
 
             // Com o disjuntor aberto, o prazo vira "agora": tenta uma vez e
-            // segue em frente, sem gastar minutos de espera por combinação.
+            // segue em frente, sem gastar nem os 45s.
             let prazo_efetivo = if consecutivas >= FALHAS_PARA_DESISTIR {
                 Instant::now()
             } else {
-                prazo
+                prazo.min(Instant::now() + Duration::from_secs(PACIENCIA_PRIMEIRA_PASSADA))
             };
 
             if let Err(e) = buscar_uf_modalidade(uf, modalidade, &data_final, &mut licitacoes, prazo_efetivo) {
