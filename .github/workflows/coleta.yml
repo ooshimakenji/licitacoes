@@ -16,11 +16,24 @@ concurrency:
 jobs:
   coletar:
     runs-on: ubuntu-latest
-    # Escopo nacional = 2.000+ páginas com 1s obrigatório entre elas: a coleta
-    # leva mais de uma hora, não os 30 min que bastavam para uma UF só.
+    # Escopo nacional = milhares de páginas com 1s obrigatório entre elas, mais
+    # o enriquecimento de itens: a coleta leva mais de uma hora.
     timeout-minutes: 150
     steps:
       - uses: actions/checkout@v4
+
+      # Os dados vivem num branch órfão, fora do histórico do código. Sem
+      # trazê-los para cá, o coletor acharia que não conhece nada e refaria o
+      # enriquecimento inteiro, marcando todo edital como novo.
+      - name: Recuperar dados da execução anterior
+        run: |
+          mkdir -p web/public/data
+          if git fetch --depth 1 origin dados 2>/dev/null; then
+            git archive FETCH_HEAD | tar -x -C web/public/data
+            echo "dados anteriores: $(ls web/public/data/*.json | wc -l) arquivos"
+          else
+            echo "branch dados ainda não existe — primeira execução particionada"
+          fi
 
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
@@ -34,27 +47,28 @@ jobs:
       - name: Coletar
         run: cargo run --release --manifest-path coletor/Cargo.toml
 
-      # Os dois números que decidem se a saída precisa ser particionada por UF.
       - name: Medir a saída
         run: |
-          arquivo=web/public/data/licitacoes.json
-          echo "- bytes: $(stat -c%s $arquivo)" >> $GITHUB_STEP_SUMMARY
-          echo "- registros: $(grep -o '"id":' $arquivo | wc -l)" >> $GITHUB_STEP_SUMMARY
+          {
+            echo "### Coleta"
+            echo '```'
+            cat web/public/data/index.json | head -c 400
+            echo
+            echo '```'
+            echo "| arquivo | bytes |"
+            echo "|---|---|"
+            du -b web/public/data/*.json | sort -rn -k1 | head -8 | awk '{print "| "$2" | "$1" |"}'
+          } >> $GITHUB_STEP_SUMMARY
 
-      - name: Commitar se mudou
+      # Um único commit, sempre reescrito: o arquivo de dados muda inteiro todo
+      # dia, e acumular isso no histórico somaria dezenas de MB por execução.
+      - name: Publicar no branch dados
         run: |
+          cd web/public/data
+          git init -q .
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          # Stage primeiro e comparar o índice: `git diff` sozinho não vê
-          # arquivo novo (untracked), e na primeira coleta o JSON é justamente
-          # um arquivo novo — o job passaria verde jogando a coleta no lixo.
-          git add web/public/data
-          if git diff --cached --quiet; then
-            echo "Sem mudanças na coleta."
-          else
-            git commit -m "chore(coleta): atualiza licitacoes.json"
-            # rebase antes: se alguém empurrou algo entre o checkout e agora,
-            # o push seria rejeitado e a coleta do dia se perderia
-            git pull --rebase --autostash
-            git push
-          fi
+          git add -A
+          git commit -q -m "dados da coleta $(date -u +%Y-%m-%dT%H:%MZ)"
+          git push -q --force "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}" HEAD:dados
+          echo "publicado em https://raw.githubusercontent.com/${{ github.repository }}/dados/index.json"

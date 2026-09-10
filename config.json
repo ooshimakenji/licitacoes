@@ -1,9 +1,13 @@
 {
   "ufs": [],
-  "modalidades": [6, 8, 9],
+  "modalidades": [
+    6,
+    8,
+    9
+  ],
   "dias_a_frente": 90,
   "manter_vencidas_por_dias": 30,
-  "saida": "web/public/data/licitacoes.json",
+  "saida_dir": "web/public/data",
   "valor_max": null,
   "palavras_chave": [],
   "enriquecer": true,

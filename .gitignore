@@ -1,3 +1,5 @@
 coletor/target/
 web/node_modules/
 web/dist/
+# Os dados vivem no branch orfao `dados`, servidos pelo raw do GitHub.
+web/public/data/

@@ -5,11 +5,13 @@ import {
   CircularProgress,
   Alert,
   Box,
+  Chip,
   Link as MuiLink,
 } from '@mui/material';
 import Filtros from './Filtros.jsx';
 import Tabela from './Tabela.jsx';
 import { AREAS, UF_PARA_REGIAO } from './areas.js';
+import { carregarIndex, carregarUfs } from './dados.js';
 
 const FILTROS_KEY = 'licitacoes:filtros';
 const TRIAGEM_KEY = 'licitacoes:triagem';
@@ -108,28 +110,62 @@ export default function App() {
   const [triagem, setTriagem] = useState(() => lerLocalStorage(TRIAGEM_KEY, {}));
   const [buscas, setBuscas] = useState(() => lerLocalStorage(BUSCAS_KEY, []));
   const [ordem, setOrdem] = useState({ coluna: 'prazo', desc: false });
+  const [carregandoUfs, setCarregandoUfs] = useState(false);
+
+  const [indice, setIndice] = useState(null);
 
   useEffect(() => {
-    fetch('data/licitacoes.json')
-      .then((r) => {
-        if (!r.ok) throw new Error('não encontrado');
-        return r.json();
-      })
-      .then((d) => {
-        setLicitacoes(d.licitacoes || []);
-        setAvisos(d.avisos || []);
+    carregarIndex()
+      .then((idx) => {
+        setIndice(idx);
+        setAvisos(idx.avisos || []);
         setStatus('ok');
       })
       .catch(() => setStatus('erro'));
   }, []);
 
+  // As UFs que você filtra são as que a tela baixa: a base inteira passa de
+  // 36 MB, e baixar tudo para depois filtrar era o que travava a tela.
+  const ufsParaCarregar = useMemo(() => {
+    const das = new Set(filtros.ufs);
+    if (filtros.regioes.length) {
+      for (const [uf, regiao] of Object.entries(UF_PARA_REGIAO)) {
+        if (filtros.regioes.includes(regiao)) das.add(uf);
+      }
+    }
+    // Só as que existem na coleta, para não pedir arquivo inexistente.
+    const existentes = indice ? Object.keys(indice.por_uf || {}) : [];
+    return [...das].filter((uf) => existentes.includes(uf)).sort();
+  }, [filtros.ufs, filtros.regioes, indice]);
+
+  useEffect(() => {
+    if (!indice || ufsParaCarregar.length === 0) {
+      setLicitacoes([]);
+      return;
+    }
+    let cancelado = false;
+    setCarregandoUfs(true);
+    carregarUfs(ufsParaCarregar)
+      .then((lics) => {
+        if (!cancelado) setLicitacoes(lics);
+      })
+      .finally(() => {
+        if (!cancelado) setCarregandoUfs(false);
+      });
+    return () => {
+      cancelado = true;
+    };
+  }, [indice, ufsParaCarregar]);
+
   useEffect(() => gravarLocalStorage(FILTROS_KEY, filtros), [filtros]);
   useEffect(() => gravarLocalStorage(TRIAGEM_KEY, triagem), [triagem]);
   useEffect(() => gravarLocalStorage(BUSCAS_KEY, buscas), [buscas]);
 
+  // Vem do index, não dos dados carregados: você precisa poder escolher uma UF
+  // que ainda não baixou.
   const ufsDisponiveis = useMemo(
-    () => [...new Set(licitacoes.map((l) => l.uf).filter(Boolean))].sort(),
-    [licitacoes],
+    () => Object.keys(indice?.por_uf || {}).sort(),
+    [indice],
   );
   const modalidadesDisponiveis = useMemo(
     () => [...new Set(licitacoes.map((l) => l.modalidade).filter(Boolean))].sort(),
@@ -278,12 +314,37 @@ export default function App() {
 
               <Box aria-live="polite" sx={{ mb: 1 }}>
                 <Typography variant="body2" color="text.secondary">
-                  {linhas.length} licitaç{linhas.length === 1 ? 'ão encontrada' : 'ões encontradas'}
+                  {carregandoUfs
+                    ? `Baixando ${ufsParaCarregar.join(', ')}…`
+                    : `${linhas.length} licitaç${linhas.length === 1 ? 'ão encontrada' : 'ões encontradas'}`}
+                  {' · '}
+                  {indice?.total?.toLocaleString('pt-BR')} editais na coleta de{' '}
+                  {indice?.gerado_em?.slice(0, 10)}
                   {' · '}os dados vêm do PNCP; confirme sempre no edital antes de decidir
                 </Typography>
               </Box>
 
-              {linhas.length === 0 ? (
+              {/* A base inteira passa de 36 MB: a tela baixa só as UFs que você
+                  filtra, então sem escolha não há o que mostrar. */}
+              {ufsParaCarregar.length === 0 ? (
+                <Alert severity="info" sx={{ mb: 2 }}>
+                  Escolha uma <strong>UF</strong> ou uma <strong>região</strong> nos filtros para
+                  carregar os editais — a base nacional é grande demais para baixar de uma vez.
+                  <Box sx={{ mt: 1, display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+                    {Object.entries(indice?.por_uf || {})
+                      .sort((a, b) => b[1] - a[1])
+                      .slice(0, 8)
+                      .map(([uf, n]) => (
+                        <Chip
+                          key={uf}
+                          label={`${uf} (${n.toLocaleString('pt-BR')})`}
+                          onClick={() => setFiltros((f) => ({ ...f, ufs: [...f.ufs, uf] }))}
+                          sx={{ minHeight: 44 }}
+                        />
+                      ))}
+                  </Box>
+                </Alert>
+              ) : linhas.length === 0 && !carregandoUfs ? (
                 <Alert severity="info">Nenhuma licitação corresponde aos filtros atuais.</Alert>
               ) : (
                 <Tabela
