@@ -4,7 +4,7 @@
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const BASE_URL: &str = "https://pncp.gov.br/api/consulta/v1/contratacoes/proposta";
 // O manual do PNCP diz máximo 500, mas a API real responde 400 "Tamanho de
@@ -267,9 +267,21 @@ const ESPERA_SEGUNDA_PASSADA: u64 = 300;
 /// Busca todas as licitações com proposta aberta para o cruzamento UF ×
 /// modalidade. Não aborta em erro parcial: acumula as combinações que falharam,
 /// repete cada uma **uma vez** ao final e devolve as que continuaram falhando.
-pub fn buscar(ufs: &[String], modalidades: &[u32], dias_a_frente: i64) -> (Vec<Licitacao>, Vec<Falha>) {
+/// Falhas seguidas que fazem o coletor parar de esperar. Se três combinações
+/// diferentes falham em sequência, o problema não é a consulta: é a API que
+/// está fora — e aí insistir só queima o orçamento das que ainda podem dar certo.
+const FALHAS_PARA_DESISTIR: u32 = 3;
+
+pub fn buscar(
+    ufs: &[String],
+    modalidades: &[u32],
+    dias_a_frente: i64,
+    minutos_max: u64,
+) -> (Vec<Licitacao>, Vec<Falha>) {
     let mut licitacoes = Vec::new();
     let mut falhas: Vec<Falha> = Vec::new();
+    let prazo = Instant::now() + Duration::from_secs(minutos_max * 60);
+    let mut consecutivas = 0u32;
 
     let data_final = match data_final(dias_a_frente) {
         Ok(d) => d,
@@ -298,7 +310,21 @@ pub fn buscar(ufs: &[String], modalidades: &[u32], dias_a_frente: i64) -> (Vec<L
             }
             primeira = false;
 
-            if let Err(e) = buscar_uf_modalidade(uf, modalidade, &data_final, &mut licitacoes) {
+            if Instant::now() >= prazo {
+                eprintln!("aviso: orçamento de {minutos_max} min esgotado — encerrando a coleta");
+                falhas.push(Falha { uf: uf.map(String::from), modalidade });
+                continue;
+            }
+
+            // Com o disjuntor aberto, o prazo vira "agora": tenta uma vez e
+            // segue em frente, sem gastar minutos de espera por combinação.
+            let prazo_efetivo = if consecutivas >= FALHAS_PARA_DESISTIR {
+                Instant::now()
+            } else {
+                prazo
+            };
+
+            if let Err(e) = buscar_uf_modalidade(uf, modalidade, &data_final, &mut licitacoes, prazo_efetivo) {
                 // Detalhe técnico vai para o log do job; a mensagem curta é
                 // derivada da falha na hora de gravar e aparece na tela. Uma
                 // modalidade inteira que falha (o pregão sumiu assim em 3 das 4
@@ -308,11 +334,23 @@ pub fn buscar(ufs: &[String], modalidades: &[u32], dias_a_frente: i64) -> (Vec<L
                     uf: uf.map(String::from),
                     modalidade,
                 });
+                consecutivas += 1;
+                if consecutivas == FALHAS_PARA_DESISTIR {
+                    eprintln!(
+                        "aviso: {FALHAS_PARA_DESISTIR} falhas seguidas — a API parece fora;                          seguindo sem esperas longas"
+                    );
+                }
+            } else {
+                consecutivas = 0;
             }
         }
     }
 
-    if falhas.is_empty() {
+    let sobra = prazo.saturating_duration_since(Instant::now()).as_secs();
+    if falhas.is_empty() || sobra < ESPERA_SEGUNDA_PASSADA + 60 {
+        if !falhas.is_empty() {
+            eprintln!("aviso: sem orçamento para a segunda passada ({sobra}s restantes)");
+        }
         return (licitacoes, falhas);
     }
 
@@ -329,7 +367,7 @@ pub fn buscar(ufs: &[String], modalidades: &[u32], dias_a_frente: i64) -> (Vec<L
     let mut ainda_falham = Vec::new();
     for falha in falhas {
         let uf = falha.uf.as_deref();
-        match buscar_uf_modalidade(uf, falha.modalidade, &data_final, &mut licitacoes) {
+        match buscar_uf_modalidade(uf, falha.modalidade, &data_final, &mut licitacoes, prazo) {
             Ok(()) => eprintln!(
                 "segunda passada recuperou uf={} modalidade={}",
                 uf.unwrap_or("BR"),
@@ -373,7 +411,10 @@ const ESPERA_TIMEOUT: [u64; 2] = [180, 300];
 
 /// Repete a mesma página enquanto houver espera prevista para aquele tipo de
 /// falha. `4xx` é parâmetro inválido nosso: repetir não conserta.
-pub(crate) fn chamar(montar: impl Fn() -> ureq::Request) -> Result<ureq::Response, Box<dyn Error>> {
+pub(crate) fn chamar(
+    montar: impl Fn() -> ureq::Request,
+    prazo: Instant,
+) -> Result<ureq::Response, Box<dyn Error>> {
     let mut tentativa = 0usize;
     loop {
         let erro = match montar().call() {
@@ -391,6 +432,14 @@ pub(crate) fn chamar(montar: impl Fn() -> ureq::Request) -> Result<ureq::Respons
             return Err(Box::new(erro));
         };
 
+        // Esperar só se couber no orçamento. Sem isso, com a API fora do ar,
+        // cada combinação gastava 450s (30+120+300) e 21 delas somavam 157 min
+        // — foi assim que o job morreu no timeout sem publicar nada.
+        if Instant::now() + Duration::from_secs(espera) >= prazo {
+            eprintln!("aviso: {erro} — sem tempo no orçamento para nova tentativa");
+            return Err(Box::new(erro));
+        }
+
         eprintln!("aviso: {erro} — nova tentativa em {espera}s");
         thread::sleep(Duration::from_secs(espera));
         tentativa += 1;
@@ -402,21 +451,25 @@ fn buscar_uf_modalidade(
     modalidade: u32,
     data_final: &str,
     licitacoes: &mut Vec<Licitacao>,
+    prazo: Instant,
 ) -> Result<(), Box<dyn Error>> {
     let mut pagina = 1u32;
     loop {
-        let http = chamar(|| {
-            let req = agente()
+        let http = chamar(
+            || {
+                let req = agente()
                 .get(BASE_URL)
                 .query("dataFinal", data_final)
                 .query("codigoModalidadeContratacao", &modalidade.to_string())
                 .query("pagina", &pagina.to_string())
-                .query("tamanhoPagina", &TAMANHO_PAGINA.to_string());
-            match uf {
-                Some(uf) => req.query("uf", uf),
-                None => req,
-            }
-        })?;
+                    .query("tamanhoPagina", &TAMANHO_PAGINA.to_string());
+                match uf {
+                    Some(uf) => req.query("uf", uf),
+                    None => req,
+                }
+            },
+            prazo,
+        )?;
 
         // Sem resultados o PNCP responde 204 com corpo vazio (acontece com
         // inexigibilidade, que raramente tem proposta aberta) — não é erro.

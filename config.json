@@ -19,5 +19,6 @@
   "valor_max": null,
   "palavras_chave": [],
   "enriquecer": true,
-  "enriquecer_max": 4000
+  "enriquecer_max": 4000,
+  "minutos_max": 45
 }

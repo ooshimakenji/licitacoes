@@ -54,6 +54,14 @@ struct Config {
     enriquecer: bool,
     #[serde(default)]
     enriquecer_max: usize,
+    /// Orçamento de tempo da coleta. Existe porque a API do PNCP cai: sem teto,
+    /// as esperas de retry somadas estouravam o job e nada era publicado.
+    #[serde(default = "orcamento_padrao")]
+    minutos_max: u64,
+}
+
+fn orcamento_padrao() -> u64 {
+    45
 }
 
 /// Um arquivo por UF.
@@ -430,7 +438,12 @@ fn executar() -> Result<(), Box<dyn Error>> {
         eprintln!("modo: apenas enriquecimento (sem coleta)");
         (Vec::new(), Vec::new())
     } else {
-        pncp::buscar(&config.ufs, &config.modalidades, config.dias_a_frente)
+        pncp::buscar(
+            &config.ufs,
+            &config.modalidades,
+            config.dias_a_frente,
+            config.minutos_max,
+        )
     };
 
     if !so_enriquecer && novas.is_empty() {

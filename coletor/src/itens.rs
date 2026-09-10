@@ -6,6 +6,11 @@
 use crate::pncp::{self, ItemResumo};
 use serde::Deserialize;
 use std::error::Error;
+use std::time::{Duration, Instant};
+
+/// Prazo por edital no enriquecimento. Aqui a unidade de trabalho é pequena
+/// (um request), então não faz sentido gastar minutos de espera num só.
+const PRAZO_POR_EDITAL: u64 = 90;
 
 // Note o caminho: é /api/pncp/v1, não o /api/consulta/v1 da busca de editais.
 const BASE_URL: &str = "https://pncp.gov.br/api/pncp/v1/orgaos";
@@ -87,12 +92,15 @@ fn classificar(itens: &[ItemApi]) -> String {
 
 pub fn buscar(cnpj: &str, ano: &str, sequencial: &str) -> Result<Enriquecimento, Box<dyn Error>> {
     let url = format!("{BASE_URL}/{cnpj}/compras/{ano}/{sequencial}/itens");
-    let http = pncp::chamar(|| {
-        pncp::agente()
-            .get(&url)
-            .query("pagina", "1")
-            .query("tamanhoPagina", &TAMANHO_PAGINA.to_string())
-    })?;
+    let http = pncp::chamar(
+        || {
+            pncp::agente()
+                .get(&url)
+                .query("pagina", "1")
+                .query("tamanhoPagina", &TAMANHO_PAGINA.to_string())
+        },
+        Instant::now() + Duration::from_secs(PRAZO_POR_EDITAL),
+    )?;
 
     // 204 = contratação sem itens publicados. Vale o mesmo sentinela do 404
     // tratado pelo chamador: é resposta definitiva, não falha a repetir.
