@@ -27,31 +27,19 @@ import CancelIcon from '@mui/icons-material/Cancel';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import KeyboardArrowUpIcon from '@mui/icons-material/KeyboardArrowUp';
+import Detalhes, { dataTexto } from './Detalhes.jsx';
+import { MONO } from './theme.js';
 
 const moeda = new Intl.NumberFormat('pt-BR', {
   style: 'currency',
   currency: 'BRL',
 });
-const dataCurta = new Intl.DateTimeFormat('pt-BR', {
-  day: '2-digit',
-  month: '2-digit',
-  year: 'numeric',
-  hour: '2-digit',
-  minute: '2-digit',
-});
-
 function prazoTexto(dias) {
   if (dias == null) return 'prazo não informado';
   if (dias < 0) return 'encerrada';
   if (dias === 0) return 'hoje';
   if (dias === 1) return 'amanhã';
   return `em ${dias} dias`;
-}
-
-function dataTexto(iso) {
-  if (!iso) return '—';
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? '—' : dataCurta.format(d);
 }
 
 function ehNova(visto) {
@@ -179,7 +167,9 @@ export default function Tabela({ rows, triagem, setTriagem, ordem, setOrdem, obj
                       não informado
                     </Typography>
                   ) : (
-                    moeda.format(item.valor)
+                    <Box component="span" sx={{ fontFamily: MONO, fontWeight: 600 }}>
+                      {moeda.format(item.valor)}
+                    </Box>
                   )}
                 </TableCell>
                 <TableCell>
@@ -280,58 +270,8 @@ export default function Tabela({ rows, triagem, setTriagem, ordem, setOrdem, obj
               <TableRow key={`${item.id}-detalhes`}>
                 <TableCell colSpan={7} sx={{ py: 0, borderBottom: expandida ? undefined : 'none' }}>
                   <Collapse in={expandida} timeout="auto" unmountOnExit>
-                    <Box id={`detalhes-${item.id}`} sx={{ py: 2 }}>
-                      <Typography variant="subtitle2" gutterBottom>
-                        Objeto completo
-                      </Typography>
-                      <Typography variant="body2" sx={{ mb: 2 }}>
-                        {item.objeto}
-                      </Typography>
-
-                      <Box
-                        sx={{
-                          display: 'grid',
-                          gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr', md: '1fr 1fr 1fr' },
-                          gap: 1,
-                          mb: 2,
-                        }}
-                      >
-                        <Detalhe rotulo="Unidade" valor={item.unidade} />
-                        <Detalhe rotulo="Modalidade" valor={item.modalidade} />
-                        <Detalhe rotulo="Situação" valor={item.situacao} />
-                        <Detalhe rotulo="Modo de disputa" valor={item.disputa} />
-                        <Detalhe rotulo="Critério de julgamento" valor={item.criterio} />
-                        <Detalhe rotulo="Base legal" valor={item.amparo} />
-                        <Detalhe rotulo="Benefício" valor={item.beneficio} />
-                        <Detalhe rotulo="Abertura das propostas" valor={dataTexto(item.abertura)} />
-                        <Detalhe rotulo="Publicado no PNCP" valor={dataTexto(item.publicado)} />
-                      </Box>
-
-                      {item.itens?.length > 0 && (
-                        <>
-                          <Typography variant="subtitle2" gutterBottom>
-                            Itens ({item.itens.length})
-                            {item.valor == null && ' — orçamento sigiloso: a quantidade é pública, o preço não'}
-                          </Typography>
-                          <Box component="ul" sx={{ m: 0, pl: 3 }}>
-                            {item.itens.slice(0, 20).map((it, i) => (
-                              <li key={i}>
-                                <Typography variant="body2">
-                                  {it.descricao} — {it.quantidade} {it.unidade}
-                                  {it.valor_unitario != null
-                                    ? ` · ${moeda.format(it.valor_unitario)}/un`
-                                    : ' · preço não informado'}
-                                </Typography>
-                              </li>
-                            ))}
-                          </Box>
-                          {item.itens.length > 20 && (
-                            <Typography variant="caption" color="text.secondary">
-                              mostrando 20 de {item.itens.length} itens
-                            </Typography>
-                          )}
-                        </>
-                      )}
+                    <Box id={`detalhes-${item.id}`}>
+                      <Detalhes item={item} />
                     </Box>
                   </Collapse>
                 </TableCell>

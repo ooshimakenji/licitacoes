@@ -19,6 +19,7 @@ import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import { AREAS, NOMES_REGIOES } from './areas.js';
 
 export default function Filtros({
+  semMoldura = false,
   ufsDisponiveis,
   modalidadesDisponiveis,
   municipiosDisponiveis,
@@ -44,15 +45,19 @@ export default function Filtros({
     <Box
       component="fieldset"
       sx={{
-        border: '1px solid',
+        border: semMoldura ? 'none' : '1px solid',
         borderColor: 'divider',
         borderRadius: 2,
-        p: 2,
+        p: semMoldura ? 0 : 2,
         m: 0,
-        mb: 3,
+        mb: semMoldura ? 1 : 3,
       }}
     >
-      <Typography component="legend" variant="h2" sx={{ fontSize: '1.1rem', px: 1 }}>
+      <Typography
+        component="legend"
+        variant="h2"
+        sx={{ fontSize: '1.1rem', px: semMoldura ? 0 : 1, mb: semMoldura ? 1 : 0 }}
+      >
         Filtros
       </Typography>
 
@@ -91,13 +96,13 @@ export default function Filtros({
               size="small"
             >
               <ToggleButton value="todos" sx={{ minHeight: 44, px: 2 }}>
-                Serviço e material
+                Todos
               </ToggleButton>
               <ToggleButton value="Serviço" sx={{ minHeight: 44, px: 2 }}>
-                Só serviços
+                Serviços
               </ToggleButton>
               <ToggleButton value="Material" sx={{ minHeight: 44, px: 2 }}>
-                Só materiais
+                Materiais
               </ToggleButton>
             </ToggleButtonGroup>
           </Box>

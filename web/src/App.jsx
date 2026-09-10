@@ -6,10 +6,20 @@ import {
   Alert,
   Box,
   Chip,
+  Button,
+  Drawer,
+  Menu,
+  MenuItem,
+  Badge,
+  useMediaQuery,
+  useTheme,
   Link as MuiLink,
 } from '@mui/material';
+import TuneIcon from '@mui/icons-material/Tune';
+import SwapVertIcon from '@mui/icons-material/SwapVert';
 import Filtros from './Filtros.jsx';
-import Tabela from './Tabela.jsx';
+import Resultados from './Resultados.jsx';
+import { ALVO_TOQUE } from './theme.js';
 import { AREAS, UF_PARA_REGIAO } from './areas.js';
 import { carregarIndex, carregarUfs } from './dados.js';
 
@@ -111,6 +121,10 @@ export default function App() {
   const [buscas, setBuscas] = useState(() => lerLocalStorage(BUSCAS_KEY, []));
   const [ordem, setOrdem] = useState({ coluna: 'prazo', desc: false });
   const [carregandoUfs, setCarregandoUfs] = useState(false);
+  const [filtrosAbertos, setFiltrosAbertos] = useState(false);
+  const [menuOrdem, setMenuOrdem] = useState(null);
+  const tema = useTheme();
+  const estreito = useMediaQuery(tema.breakpoints.down('md'));
 
   const [indice, setIndice] = useState(null);
 
@@ -247,6 +261,15 @@ export default function App() {
     });
   }, [licitacoes, filtros, triagem, ordem]);
 
+  const filtrosAtivos = useMemo(() => {
+    const p = FILTROS_PADRAO;
+    return Object.keys(p).filter((k) => {
+      const v = filtros[k];
+      const d = p[k];
+      return Array.isArray(v) ? v.length > 0 : v !== d;
+    }).length;
+  }, [filtros]);
+
   const salvarBusca = (nome) =>
     setBuscas((bs) => [...bs.filter((b) => b.nome !== nome), { nome, filtros }]);
   const excluirBusca = (nome) => setBuscas((bs) => bs.filter((b) => b.nome !== nome));
@@ -262,6 +285,9 @@ export default function App() {
           zIndex: 100,
           bgcolor: 'background.paper',
           p: 1,
+          minHeight: ALVO_TOQUE,
+          display: 'inline-flex',
+          alignItems: 'center',
           '&:focus': { left: 8, top: 8 },
         }}
       >
@@ -269,7 +295,7 @@ export default function App() {
       </MuiLink>
 
       <Container maxWidth="xl" sx={{ py: 3 }}>
-        <Typography variant="h1" sx={{ fontSize: '1.75rem', fontWeight: 700, mb: 2 }}>
+        <Typography variant="h1" sx={{ fontSize: { xs: '1.25rem', md: '1.75rem' }, mb: { xs: 1, md: 2 } }}>
           Painel de licitações
         </Typography>
 
@@ -300,27 +326,80 @@ export default function App() {
                 </Alert>
               )}
 
-              <Filtros
-                ufsDisponiveis={ufsDisponiveis}
-                modalidadesDisponiveis={modalidadesDisponiveis}
-                municipiosDisponiveis={municipiosDisponiveis}
-                filtros={filtros}
-                setFiltros={setFiltros}
-                onLimpar={() => setFiltros(FILTROS_PADRAO)}
-                buscas={buscas}
-                onSalvarBusca={salvarBusca}
-                onExcluirBusca={excluirBusca}
-              />
+              {/* No celular os filtros são muitos para ficar empilhados acima
+                  da lista: viram folha inferior, aberta pela barra de ações
+                  que fica ao alcance do polegar. */}
+              {estreito ? (
+                <Drawer
+                  anchor="bottom"
+                  open={filtrosAbertos}
+                  onClose={() => setFiltrosAbertos(false)}
+                  PaperProps={{
+                    sx: {
+                      maxHeight: '88vh',
+                      borderTopLeftRadius: 16,
+                      borderTopRightRadius: 16,
+                      px: 2,
+                      pt: 1,
+                      pb: `calc(16px + env(safe-area-inset-bottom))`,
+                    },
+                  }}
+                >
+                  <Box
+                    aria-hidden="true"
+                    sx={{ width: 32, height: 4, bgcolor: 'divider', borderRadius: 2, mx: 'auto', mb: 1 }}
+                  />
+                  <Filtros
+                    semMoldura
+                    ufsDisponiveis={ufsDisponiveis}
+                    modalidadesDisponiveis={modalidadesDisponiveis}
+                    municipiosDisponiveis={municipiosDisponiveis}
+                    filtros={filtros}
+                    setFiltros={setFiltros}
+                    onLimpar={() => setFiltros(FILTROS_PADRAO)}
+                    buscas={buscas}
+                    onSalvarBusca={salvarBusca}
+                    onExcluirBusca={excluirBusca}
+                  />
+                  <Button
+                    fullWidth
+                    variant="contained"
+                    onClick={() => setFiltrosAbertos(false)}
+                    sx={{
+                      minHeight: ALVO_TOQUE,
+                      position: 'sticky',
+                      bottom: 0,
+                      // Sombra separa o botão do conteúdo que passa atrás dele.
+                      boxShadow: '0 -8px 12px -8px rgba(0,0,0,0.35)',
+                    }}
+                  >
+                    Ver {linhas.length} resultado{linhas.length === 1 ? '' : 's'}
+                  </Button>
+                </Drawer>
+              ) : (
+                <Filtros
+                  ufsDisponiveis={ufsDisponiveis}
+                  modalidadesDisponiveis={modalidadesDisponiveis}
+                  municipiosDisponiveis={municipiosDisponiveis}
+                  filtros={filtros}
+                  setFiltros={setFiltros}
+                  onLimpar={() => setFiltros(FILTROS_PADRAO)}
+                  buscas={buscas}
+                  onSalvarBusca={salvarBusca}
+                  onExcluirBusca={excluirBusca}
+                />
+              )}
 
               <Box aria-live="polite" sx={{ mb: 1 }}>
                 <Typography variant="body2" color="text.secondary">
                   {carregandoUfs
                     ? `Baixando ${ufsParaCarregar.join(', ')}…`
-                    : `${linhas.length} licitaç${linhas.length === 1 ? 'ão encontrada' : 'ões encontradas'}`}
-                  {' · '}
-                  {indice?.total?.toLocaleString('pt-BR')} editais na coleta de{' '}
-                  {indice?.gerado_em?.slice(0, 10)}
-                  {' · '}os dados vêm do PNCP; confirme sempre no edital antes de decidir
+                    : ufsParaCarregar.length === 0
+                      ? `${indice?.total?.toLocaleString('pt-BR')} editais na coleta de ${indice?.gerado_em?.slice(0, 10)}`
+                      : `${linhas.length} licitaç${linhas.length === 1 ? 'ão' : 'ões'} em ${ufsParaCarregar.join(', ')} · coleta de ${indice?.gerado_em?.slice(0, 10)}`}
+                  <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>
+                    {' · '}dados do PNCP; confirme sempre no edital antes de decidir
+                  </Box>
                 </Typography>
               </Box>
 
@@ -347,7 +426,7 @@ export default function App() {
               ) : linhas.length === 0 && !carregandoUfs ? (
                 <Alert severity="info">Nenhuma licitação corresponde aos filtros atuais.</Alert>
               ) : (
-                <Tabela
+                <Resultados
                   rows={linhas}
                   triagem={triagem}
                   setTriagem={setTriagem}
@@ -360,6 +439,83 @@ export default function App() {
           )}
         </Box>
       </Container>
+
+      {/* Barra de ações do celular: filtro e ordenação ficam embaixo, onde o
+          polegar alcança, e não no topo da página. */}
+      {estreito && status === 'ok' && (
+        <Box
+          component="nav"
+          aria-label="Ações da lista"
+          sx={{
+            position: 'fixed',
+            left: 0,
+            right: 0,
+            bottom: 0,
+            zIndex: 10,
+            display: 'flex',
+            gap: 1,
+            px: 2,
+            pt: 1,
+            pb: `calc(8px + env(safe-area-inset-bottom))`,
+            bgcolor: 'background.paper',
+            borderTop: '1px solid',
+            borderColor: 'divider',
+          }}
+        >
+          <Badge
+            badgeContent={filtrosAtivos}
+            color="primary"
+            sx={{ flex: 1, '& .MuiBadge-badge': { top: 6, right: 10 } }}
+          >
+            <Button
+              fullWidth
+              variant="contained"
+              startIcon={<TuneIcon />}
+              onClick={() => setFiltrosAbertos(true)}
+              sx={{ minHeight: ALVO_TOQUE }}
+            >
+              Filtros
+            </Button>
+          </Badge>
+          <Button
+            variant="outlined"
+            startIcon={<SwapVertIcon />}
+            onClick={(e) => setMenuOrdem(e.currentTarget)}
+            sx={{ minHeight: ALVO_TOQUE, flex: 1, bgcolor: 'background.paper' }}
+          >
+            {ORDENS.find((o) => o.id === ordem.coluna)?.curto || 'Ordenar'}
+          </Button>
+          <Menu anchorEl={menuOrdem} open={Boolean(menuOrdem)} onClose={() => setMenuOrdem(null)}>
+            {ORDENS.map((o) => (
+              <MenuItem
+                key={`${o.id}-${o.desc}`}
+                selected={ordem.coluna === o.id && ordem.desc === o.desc}
+                onClick={() => {
+                  setOrdem({ coluna: o.id, desc: o.desc });
+                  setMenuOrdem(null);
+                }}
+                sx={{ minHeight: ALVO_TOQUE }}
+              >
+                {o.label}
+              </MenuItem>
+            ))}
+          </Menu>
+        </Box>
+      )}
+
+      {/* Espaço para a barra fixa não cobrir o último card. */}
+      {estreito && <Box sx={{ height: `calc(72px + env(safe-area-inset-bottom))` }} />}
     </>
   );
 }
+
+/// Sem cabeçalho de tabela no celular, a ordenação precisa estar dita por
+/// extenso — inclusive o sentido, que numa seta é adivinhação.
+const ORDENS = [
+  { id: 'prazo', desc: false, label: 'Encerra primeiro', curto: 'Prazo' },
+  { id: 'prazo', desc: true, label: 'Encerra por último', curto: 'Prazo' },
+  { id: 'valor', desc: true, label: 'Maior valor', curto: 'Valor' },
+  { id: 'valor', desc: false, label: 'Menor valor', curto: 'Valor' },
+  { id: 'publicado', desc: true, label: 'Publicado mais recente', curto: 'Publicação' },
+  { id: 'local', desc: false, label: 'Município (A–Z)', curto: 'Município' },
+];

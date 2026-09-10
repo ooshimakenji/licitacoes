@@ -9,6 +9,14 @@ import { createTheme } from '@mui/material/styles';
 const bg = '#F5F7FA'; // fundo padrão da página
 const paper = '#FFFFFF'; // fundo de cartões/tabela
 
+/// Face dos números: prazo, valor, data e nº de processo. Algarismo de largura
+/// fixa é o que permite comparar valores de olho, descendo a lista.
+export const MONO = '"IBM Plex Mono", ui-monospace, "Cascadia Mono", monospace';
+
+/// Altura mínima de alvo no toque. A AAA pede 44 (2.5.5) e o Material 3
+/// recomenda 48 — no celular vale o maior dos dois.
+export const ALVO_TOQUE = 48;
+
 export const theme = createTheme({
   palette: {
     background: { default: bg, paper },
@@ -37,8 +45,13 @@ export const theme = createTheme({
   },
   shape: { borderRadius: 8 },
   typography: {
-    fontFamily:
-      '"Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
+    // IBM Plex: o vocabulário desta tela é protocolo, número de processo e
+    // valor unitário. O Mono entra só nos números (prazo, dinheiro, datas),
+    // onde algarismo de largura fixa faz a coluna ficar legível na varredura.
+    fontFamily: '"IBM Plex Sans", "Segoe UI", Roboto, Arial, sans-serif',
+    h1: { fontSize: '1.75rem', fontWeight: 600, letterSpacing: '-0.02em' },
+    h2: { fontSize: '1.1rem', fontWeight: 600 },
+    button: { textTransform: 'none', fontWeight: 500 },
   },
   components: {
     MuiCssBaseline: {
@@ -89,6 +102,15 @@ export const theme = createTheme({
         // Default do MUI é rgba(0,0,0,0.23) = 1.74:1, reprova em 1.4.11
         // (contorno de componente precisa de 3:1). #6B7480 = 4.6:1.
         notchedOutline: { borderColor: '#6B7480' },
+        // 16px é o mínimo que o iOS aceita sem dar zoom automático no campo
+        // ao focar — abaixo disso a página inteira salta a cada toque.
+        input: { fontSize: 16 },
+      },
+    },
+    MuiChip: {
+      styleOverrides: {
+        // Chip é alvo de toque nesta tela (áreas, buscas salvas), não enfeite.
+        root: { '@media (pointer: coarse)': { minHeight: ALVO_TOQUE } },
       },
     },
   },
