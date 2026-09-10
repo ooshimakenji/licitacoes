@@ -37,3 +37,19 @@ export async function carregarUfs(ufs) {
   );
   return partes.flat();
 }
+
+// Os itens vivem em arquivo separado — só de SP eles respondiam por metade dos
+// 8,3 MB, e só fazem falta quando você expande uma linha. Uma UF é baixada uma
+// vez por sessão; o cache guarda a promessa, então dois cliques rápidos na mesma
+// UF não viram dois downloads.
+const cacheItens = new Map();
+
+export function carregarItens(uf) {
+  if (!cacheItens.has(uf)) {
+    cacheItens.set(
+      uf,
+      json(`itens/${uf}.json`).catch(() => ({})),
+    );
+  }
+  return cacheItens.get(uf);
+}

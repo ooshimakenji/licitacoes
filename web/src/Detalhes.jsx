@@ -1,5 +1,7 @@
-import { Box, Typography } from '@mui/material';
+import { useEffect, useState } from 'react';
+import { Box, Typography, Skeleton } from '@mui/material';
 import { MONO } from './theme.js';
+import { carregarItens } from './dados.js';
 
 const moeda = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
 const dataCurta = new Intl.DateTimeFormat('pt-BR', {
@@ -19,6 +21,22 @@ export function dataTexto(iso) {
 /// Detalhes de um edital. Mesmo conteúdo na tabela (linha expansível) e no
 /// card do celular — um componente só para as duas telas não divergirem.
 export default function Detalhes({ item }) {
+  // Os itens não vêm no {UF}.json: são buscados na primeira vez que uma linha
+  // daquela UF é expandida. Como este componente só monta ao expandir, o efeito
+  // aqui é exatamente "sob demanda".
+  const [itens, setItens] = useState(item.itens?.length ? item.itens : null);
+
+  useEffect(() => {
+    if (itens || !item.uf) return;
+    let vivo = true;
+    carregarItens(item.uf).then((mapa) => {
+      if (vivo) setItens(mapa[item.id] || []);
+    });
+    return () => {
+      vivo = false;
+    };
+  }, [item.id, item.uf, itens]);
+
   return (
     <Box sx={{ py: 2 }}>
       <Typography variant="subtitle2" gutterBottom>
@@ -47,10 +65,12 @@ export default function Detalhes({ item }) {
         <Campo rotulo="Publicado" valor={dataTexto(item.publicado)} mono />
       </Box>
 
-      {item.itens?.length > 0 && (
+      {itens === null && <Skeleton variant="rounded" height={64} />}
+
+      {itens?.length > 0 && (
         <>
           <Typography variant="subtitle2" gutterBottom>
-            Itens ({item.itens.length})
+            Itens ({itens.length})
           </Typography>
           {/* Em edital com orçamento sigiloso o preço vem zerado, mas a
               quantidade continua pública — é o que dá noção de porte. */}
@@ -60,7 +80,7 @@ export default function Detalhes({ item }) {
             </Typography>
           )}
           <Box component="ul" sx={{ m: 0, pl: 2.5 }}>
-            {item.itens.map((it, i) => (
+            {itens.map((it, i) => (
               <li key={i}>
                 <Typography variant="body2">
                   {it.descricao}

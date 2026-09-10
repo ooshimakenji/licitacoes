@@ -1,5 +1,13 @@
 {
-  "ufs": [],
+  "ufs": [
+    "ES",
+    "MG",
+    "PR",
+    "RJ",
+    "RS",
+    "SC",
+    "SP"
+  ],
   "modalidades": [
     6,
     8,

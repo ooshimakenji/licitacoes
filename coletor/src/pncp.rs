@@ -240,18 +240,42 @@ fn data_final(dias_a_frente: i64) -> Result<String, Box<dyn Error>> {
     Ok(alvo.format(formato)?)
 }
 
+/// Uma combinação UF × modalidade que não pôde ser coletada. Guardar os campos
+/// em vez da frase pronta é o que permite repetir só o que falhou.
+#[derive(Debug, Clone)]
+pub struct Falha {
+    pub uf: Option<String>,
+    pub modalidade: u32,
+}
+
+impl Falha {
+    /// Texto que vai para o `avisos` do index e aparece na tela.
+    pub fn aviso(&self) -> String {
+        format!(
+            "modalidade {}{} não foi coletada nesta execução: a API do PNCP falhou",
+            self.modalidade,
+            self.uf.as_deref().map(|u| format!(" em {u}")).unwrap_or_default()
+        )
+    }
+}
+
+/// Espera antes da segunda passada. O padrão observado em quatro coletas foi de
+/// falhas que se resolvem em minutos (duas delas morreram já na página 1), então
+/// insistir depois de um intervalo custa pouco e recupera o dia.
+const ESPERA_SEGUNDA_PASSADA: u64 = 300;
+
 /// Busca todas as licitações com proposta aberta para o cruzamento UF ×
-/// modalidade. Não aborta em erro parcial: acumula falhas em `erros` e
-/// segue para a próxima combinação.
-pub fn buscar(ufs: &[String], modalidades: &[u32], dias_a_frente: i64) -> (Vec<Licitacao>, Vec<String>) {
+/// modalidade. Não aborta em erro parcial: acumula as combinações que falharam,
+/// repete cada uma **uma vez** ao final e devolve as que continuaram falhando.
+pub fn buscar(ufs: &[String], modalidades: &[u32], dias_a_frente: i64) -> (Vec<Licitacao>, Vec<Falha>) {
     let mut licitacoes = Vec::new();
-    let mut erros = Vec::new();
+    let mut falhas: Vec<Falha> = Vec::new();
 
     let data_final = match data_final(dias_a_frente) {
         Ok(d) => d,
         Err(e) => {
-            erros.push(format!("falha ao calcular dataFinal: {e}"));
-            return (licitacoes, erros);
+            eprintln!("erro: falha ao calcular dataFinal: {e}");
+            return (licitacoes, falhas);
         }
     };
 
@@ -275,20 +299,55 @@ pub fn buscar(ufs: &[String], modalidades: &[u32], dias_a_frente: i64) -> (Vec<L
             primeira = false;
 
             if let Err(e) = buscar_uf_modalidade(uf, modalidade, &data_final, &mut licitacoes) {
-                // Detalhe técnico vai para o log do job; a mensagem curta vai
-                // para o JSON e aparece na tela. Uma modalidade inteira que
-                // falha (o pregão sumiu assim em 09/09/2026) não pode passar
-                // como se a coleta estivesse completa.
+                // Detalhe técnico vai para o log do job; a mensagem curta é
+                // derivada da falha na hora de gravar e aparece na tela. Uma
+                // modalidade inteira que falha (o pregão sumiu assim em 3 das 4
+                // primeiras coletas) não pode passar como coleta completa.
                 eprintln!("erro: uf={} modalidade={modalidade}: {e}", uf.unwrap_or("BR"));
-                erros.push(format!(
-                    "modalidade {modalidade}{} não foi coletada nesta execução: a API do PNCP falhou",
-                    uf.map(|u| format!(" em {u}")).unwrap_or_default()
-                ));
+                falhas.push(Falha {
+                    uf: uf.map(String::from),
+                    modalidade,
+                });
             }
         }
     }
 
-    (licitacoes, erros)
+    if falhas.is_empty() {
+        return (licitacoes, falhas);
+    }
+
+    // Segunda passada. Nos runs de 09-10/09/2026 o pregão morreu na página 1
+    // com 500 e a API voltou minutos depois — o retry por página (30s/2min/5min)
+    // não alcança isso, mas uma repetição no fim do job alcança.
+    eprintln!(
+        "aviso: {} combinações falharam; segunda passada em {}s",
+        falhas.len(),
+        ESPERA_SEGUNDA_PASSADA
+    );
+    thread::sleep(Duration::from_secs(ESPERA_SEGUNDA_PASSADA));
+
+    let mut ainda_falham = Vec::new();
+    for falha in falhas {
+        let uf = falha.uf.as_deref();
+        match buscar_uf_modalidade(uf, falha.modalidade, &data_final, &mut licitacoes) {
+            Ok(()) => eprintln!(
+                "segunda passada recuperou uf={} modalidade={}",
+                uf.unwrap_or("BR"),
+                falha.modalidade
+            ),
+            Err(e) => {
+                eprintln!(
+                    "erro: segunda passada falhou uf={} modalidade={}: {e}",
+                    uf.unwrap_or("BR"),
+                    falha.modalidade
+                );
+                ainda_falham.push(falha);
+            }
+        }
+        thread::sleep(Duration::from_secs(1));
+    }
+
+    (licitacoes, ainda_falham)
 }
 
 /// Timeout explícito: sem ele uma conexão pendurada consumiria os 30 minutos
@@ -307,7 +366,9 @@ pub(crate) fn agente() -> ureq::Agent {
 // 500 depois de 30-50s e 504 depois de 70s, e voltou sozinho. Timeout é o
 // bloqueio de IP por rajada, que só sai depois de ~3 min: insistir em segundos
 // apenas renova o bloqueio.
-const ESPERA_5XX: [u64; 3] = [5, 30, 120];
+// Medido: durante uma instabilidade real do PNCP, três tentativas espaçadas de
+// 45s falharam em sequência — esperas de segundos não alcançam o problema.
+const ESPERA_5XX: [u64; 3] = [30, 120, 300];
 const ESPERA_TIMEOUT: [u64; 2] = [180, 300];
 
 /// Repete a mesma página enquanto houver espera prevista para aquele tipo de

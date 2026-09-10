@@ -1,9 +1,9 @@
-name: coleta
+name: enriquecer
 
 on:
   schedule:
-    # 09:00 UTC = 06:00 BRT, dias úteis
-    - cron: "0 9 * * 1-5"
+    # 13:00 UTC = 10:00 BRT: depois da coleta, para pegar os editais do dia.
+    - cron: "0 13 * * 1-5"
   workflow_dispatch:
 
 permissions:
@@ -18,9 +18,8 @@ concurrency:
 jobs:
   coletar:
     runs-on: ubuntu-latest
-    # Só coleta (o enriquecimento virou workflow próprio) e restrita a Sul e
-    # Sudeste: 7 varreduras pequenas em vez de uma nacional.
-    timeout-minutes: 60
+    # Um request por edital com 0,5s entre eles: o teto é enriquecer_max.
+    timeout-minutes: 150
     steps:
       - uses: actions/checkout@v4
 
@@ -46,15 +45,15 @@ jobs:
         working-directory: coletor
         run: cargo test --release
 
-      - name: Coletar
+      - name: Enriquecer
         env:
-          MODO: coletar
+          MODO: enriquecer
         run: cargo run --release --manifest-path coletor/Cargo.toml
 
       - name: Medir a saída
         run: |
           {
-            echo "### Coleta"
+            echo "### Enriquecimento"
             echo '```'
             cat web/public/data/index.json | head -c 400
             echo
@@ -73,6 +72,6 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
-          git commit -q -m "dados da coleta $(date -u +%Y-%m-%dT%H:%MZ)"
+          git commit -q -m "dados do enriquecimento $(date -u +%Y-%m-%dT%H:%MZ)"
           git push -q --force "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}" HEAD:dados
           echo "publicado em https://raw.githubusercontent.com/${{ github.repository }}/dados/index.json"
