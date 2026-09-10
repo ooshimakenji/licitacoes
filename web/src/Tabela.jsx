@@ -7,20 +7,26 @@ import {
   TableHead,
   TablePagination,
   TableRow,
+  TableSortLabel,
   ToggleButton,
   ToggleButtonGroup,
   Tooltip,
   Typography,
   Chip,
+  Collapse,
+  IconButton,
   Link,
   Paper,
   Box,
+  Stack,
 } from '@mui/material';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import FiberNewIcon from '@mui/icons-material/FiberNew';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import CancelIcon from '@mui/icons-material/Cancel';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
+import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
+import KeyboardArrowUpIcon from '@mui/icons-material/KeyboardArrowUp';
 
 const moeda = new Intl.NumberFormat('pt-BR', {
   style: 'currency',
@@ -35,10 +41,17 @@ const dataCurta = new Intl.DateTimeFormat('pt-BR', {
 });
 
 function prazoTexto(dias) {
+  if (dias == null) return 'prazo não informado';
   if (dias < 0) return 'encerrada';
   if (dias === 0) return 'hoje';
   if (dias === 1) return 'amanhã';
   return `em ${dias} dias`;
+}
+
+function dataTexto(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? '—' : dataCurta.format(d);
 }
 
 function ehNova(visto) {
@@ -50,9 +63,19 @@ function ehNova(visto) {
   return visto === fmt(hoje) || visto === fmt(ontem);
 }
 
-export default function Tabela({ rows, triagem, setTriagem }) {
+const CABECALHOS = [
+  { id: 'prazo', label: 'Prazo', ordenavel: true },
+  { id: 'valor', label: 'Valor', ordenavel: true },
+  { id: 'local', label: 'Órgão / Município-UF', ordenavel: true },
+  { id: 'objeto', label: 'Objeto', ordenavel: false },
+  { id: 'links', label: 'Links', ordenavel: false },
+  { id: 'triagem', label: 'Triagem', ordenavel: false },
+];
+
+export default function Tabela({ rows, triagem, setTriagem, ordem, setOrdem, objetoCompleto }) {
   const [pagina, setPagina] = useState(0);
   const [porPagina, setPorPagina] = useState(25);
+  const [aberta, setAberta] = useState(null);
 
   // Um filtro mais estreito pode encurtar a lista para menos que a página
   // atual. Limitar em vez de zerar: `rows` também muda a cada clique de
@@ -61,32 +84,66 @@ export default function Tabela({ rows, triagem, setTriagem }) {
   const paginaAtual = Math.min(pagina, ultimaPagina);
   const visiveis = rows.slice(paginaAtual * porPagina, paginaAtual * porPagina + porPagina);
 
+  const ordenarPor = (coluna) => {
+    setOrdem((o) => ({ coluna, desc: o.coluna === coluna ? !o.desc : false }));
+    setPagina(0);
+  };
+
   return (
-    // tabIndex torna a área rolável alcançável só pelo teclado (WCAG 2.1.1),
-    // já que a tabela tem minWidth 900 e rola na horizontal.
     <TableContainer component={Paper} variant="outlined" tabIndex={0} role="region" aria-label="Licitações">
       <Table sx={{ minWidth: 900 }}>
         <caption style={{ position: 'absolute', width: 1, height: 1, overflow: 'hidden', clip: 'rect(0 0 0 0)' }}>
-          Lista de licitações filtradas, ordenadas por prazo de encerramento crescente,
-          {porPagina} por página.
+          Lista de licitações filtradas, {porPagina} por página. Colunas com seta podem ser
+          ordenadas; encerradas ficam sempre no fim.
         </caption>
         <TableHead>
           <TableRow>
-            <TableCell component="th" scope="col">Prazo</TableCell>
-            <TableCell component="th" scope="col">Valor</TableCell>
-            <TableCell component="th" scope="col">Órgão / Município-UF</TableCell>
-            <TableCell component="th" scope="col">Objeto</TableCell>
-            <TableCell component="th" scope="col">Links</TableCell>
-            <TableCell component="th" scope="col">Triagem</TableCell>
+            <TableCell component="th" scope="col" sx={{ width: 48 }}>
+              <Box component="span" sx={visuallyHidden}>Detalhes</Box>
+            </TableCell>
+            {CABECALHOS.map((c) =>
+              c.ordenavel ? (
+                <TableCell
+                  key={c.id}
+                  component="th"
+                  scope="col"
+                  aria-sort={ordem.coluna === c.id ? (ordem.desc ? 'descending' : 'ascending') : 'none'}
+                >
+                  <TableSortLabel
+                    active={ordem.coluna === c.id}
+                    direction={ordem.coluna === c.id && ordem.desc ? 'desc' : 'asc'}
+                    onClick={() => ordenarPor(c.id)}
+                  >
+                    {c.label}
+                  </TableSortLabel>
+                </TableCell>
+              ) : (
+                <TableCell key={c.id} component="th" scope="col">
+                  {c.label}
+                </TableCell>
+              ),
+            )}
           </TableRow>
         </TableHead>
         <TableBody>
           {visiveis.map(({ item, dias }) => {
-            const critico = dias <= 3 && dias >= 0;
+            const critico = dias != null && dias <= 3 && dias >= 0;
             const nova = ehNova(item.visto);
             const estado = triagem[item.id] || null;
-            return (
+            const expandida = aberta === item.id;
+            const meEpp = /ME\/EPP/i.test(item.beneficio || '');
+            return [
               <TableRow key={item.id} hover>
+                <TableCell>
+                  <IconButton
+                    aria-label={expandida ? 'Ocultar detalhes' : 'Ver detalhes'}
+                    aria-expanded={expandida}
+                    aria-controls={`detalhes-${item.id}`}
+                    onClick={() => setAberta(expandida ? null : item.id)}
+                  >
+                    {expandida ? <KeyboardArrowUpIcon /> : <KeyboardArrowDownIcon />}
+                  </IconButton>
+                </TableCell>
                 <TableCell>
                   <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
                     <Typography
@@ -103,7 +160,7 @@ export default function Tabela({ rows, triagem, setTriagem }) {
                       {prazoTexto(dias)}
                     </Typography>
                     <Typography variant="caption" color="text.secondary">
-                      {dataCurta.format(new Date(item.encerramento))}
+                      {dataTexto(item.encerramento)}
                     </Typography>
                     {nova && (
                       <Chip
@@ -117,28 +174,46 @@ export default function Tabela({ rows, triagem, setTriagem }) {
                   </Box>
                 </TableCell>
                 <TableCell>
-                  {item.valor == null ? '—' : moeda.format(item.valor)}
+                  {item.valor == null ? (
+                    <Typography variant="body2" color="text.secondary">
+                      não informado
+                    </Typography>
+                  ) : (
+                    moeda.format(item.valor)
+                  )}
                 </TableCell>
                 <TableCell>
                   <Typography variant="body2">{item.orgao}</Typography>
                   <Typography variant="caption" color="text.secondary">
                     {item.municipio}-{item.uf}
+                    {item.esfera ? ` · ${item.esfera}` : ''}
                   </Typography>
                 </TableCell>
-                <TableCell sx={{ maxWidth: 320 }}>
-                  <Tooltip title={item.objeto}>
+                <TableCell sx={{ maxWidth: objetoCompleto ? 520 : 320 }}>
+                  <Tooltip title={objetoCompleto ? '' : item.objeto}>
                     <Typography
                       variant="body2"
-                      sx={{
-                        display: '-webkit-box',
-                        WebkitLineClamp: 2,
-                        WebkitBoxOrient: 'vertical',
-                        overflow: 'hidden',
-                      }}
+                      sx={
+                        objetoCompleto
+                          ? undefined
+                          : {
+                              display: '-webkit-box',
+                              WebkitLineClamp: 2,
+                              WebkitBoxOrient: 'vertical',
+                              overflow: 'hidden',
+                            }
+                      }
                     >
                       {item.objeto}
                     </Typography>
                   </Tooltip>
+                  <Stack direction="row" spacing={0.5} sx={{ mt: 0.5, flexWrap: 'wrap', gap: 0.5 }}>
+                    {item.tipo && item.tipo !== 'não informado' && (
+                      <Chip label={item.tipo} size="small" variant="outlined" />
+                    )}
+                    {meEpp && <Chip label="Exclusivo ME/EPP" size="small" color="success" />}
+                    {item.srp && <Chip label="Registro de preços" size="small" variant="outlined" />}
+                  </Stack>
                 </TableCell>
                 <TableCell>
                   <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
@@ -174,9 +249,7 @@ export default function Tabela({ rows, triagem, setTriagem }) {
                   <ToggleButtonGroup
                     value={estado}
                     exclusive
-                    onChange={(_, v) =>
-                      setTriagem((t) => ({ ...t, [item.id]: v }))
-                    }
+                    onChange={(_, v) => setTriagem((t) => ({ ...t, [item.id]: v }))}
                     aria-label={`Triagem da licitação ${item.orgao}`}
                     size="small"
                   >
@@ -203,8 +276,67 @@ export default function Tabela({ rows, triagem, setTriagem }) {
                     {!estado && 'Sem marca'}
                   </Typography>
                 </TableCell>
-              </TableRow>
-            );
+              </TableRow>,
+              <TableRow key={`${item.id}-detalhes`}>
+                <TableCell colSpan={7} sx={{ py: 0, borderBottom: expandida ? undefined : 'none' }}>
+                  <Collapse in={expandida} timeout="auto" unmountOnExit>
+                    <Box id={`detalhes-${item.id}`} sx={{ py: 2 }}>
+                      <Typography variant="subtitle2" gutterBottom>
+                        Objeto completo
+                      </Typography>
+                      <Typography variant="body2" sx={{ mb: 2 }}>
+                        {item.objeto}
+                      </Typography>
+
+                      <Box
+                        sx={{
+                          display: 'grid',
+                          gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr', md: '1fr 1fr 1fr' },
+                          gap: 1,
+                          mb: 2,
+                        }}
+                      >
+                        <Detalhe rotulo="Unidade" valor={item.unidade} />
+                        <Detalhe rotulo="Modalidade" valor={item.modalidade} />
+                        <Detalhe rotulo="Situação" valor={item.situacao} />
+                        <Detalhe rotulo="Modo de disputa" valor={item.disputa} />
+                        <Detalhe rotulo="Critério de julgamento" valor={item.criterio} />
+                        <Detalhe rotulo="Base legal" valor={item.amparo} />
+                        <Detalhe rotulo="Benefício" valor={item.beneficio} />
+                        <Detalhe rotulo="Abertura das propostas" valor={dataTexto(item.abertura)} />
+                        <Detalhe rotulo="Publicado no PNCP" valor={dataTexto(item.publicado)} />
+                      </Box>
+
+                      {item.itens?.length > 0 && (
+                        <>
+                          <Typography variant="subtitle2" gutterBottom>
+                            Itens ({item.itens.length})
+                            {item.valor == null && ' — orçamento sigiloso: a quantidade é pública, o preço não'}
+                          </Typography>
+                          <Box component="ul" sx={{ m: 0, pl: 3 }}>
+                            {item.itens.slice(0, 20).map((it, i) => (
+                              <li key={i}>
+                                <Typography variant="body2">
+                                  {it.descricao} — {it.quantidade} {it.unidade}
+                                  {it.valor_unitario != null
+                                    ? ` · ${moeda.format(it.valor_unitario)}/un`
+                                    : ' · preço não informado'}
+                                </Typography>
+                              </li>
+                            ))}
+                          </Box>
+                          {item.itens.length > 20 && (
+                            <Typography variant="caption" color="text.secondary">
+                              mostrando 20 de {item.itens.length} itens
+                            </Typography>
+                          )}
+                        </>
+                      )}
+                    </Box>
+                  </Collapse>
+                </TableCell>
+              </TableRow>,
+            ];
           })}
         </TableBody>
       </Table>
@@ -221,11 +353,21 @@ export default function Tabela({ rows, triagem, setTriagem }) {
         }}
         labelRowsPerPage="Linhas por página"
         labelDisplayedRows={({ from, to, count }) => `${from}–${to} de ${count}`}
-        getItemAriaLabel={(tipo) =>
-          tipo === 'next' ? 'Próxima página' : 'Página anterior'
-        }
+        getItemAriaLabel={(tipo) => (tipo === 'next' ? 'Próxima página' : 'Página anterior')}
       />
     </TableContainer>
+  );
+}
+
+function Detalhe({ rotulo, valor }) {
+  if (!valor) return null;
+  return (
+    <Box>
+      <Typography variant="caption" color="text.secondary" component="div">
+        {rotulo}
+      </Typography>
+      <Typography variant="body2">{valor}</Typography>
+    </Box>
   );
 }
 

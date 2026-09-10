@@ -42,6 +42,26 @@ pub struct ItemPncp {
     pub modalidade_nome: Option<String>,
     #[serde(default)]
     pub link_sistema_origem: Option<String>,
+    // Campos que a consulta já devolve de graça e antes eram jogados fora.
+    #[serde(default)]
+    pub srp: Option<bool>,
+    #[serde(default)]
+    pub modalidade_id: Option<u32>,
+    #[serde(default)]
+    pub modo_disputa_nome: Option<String>,
+    #[serde(default)]
+    pub situacao_compra_nome: Option<String>,
+    #[serde(default)]
+    pub data_publicacao_pncp: Option<String>,
+    #[serde(default)]
+    pub amparo_legal: Option<AmparoLegal>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AmparoLegal {
+    #[serde(default)]
+    pub nome: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -51,6 +71,14 @@ pub struct UnidadeOrgao {
     pub uf_sigla: Option<String>,
     #[serde(default)]
     pub municipio_nome: Option<String>,
+    // Qual secretaria pediu a compra, e o código IBGE (base do mapa e do
+    // "perto de mim" calculado no navegador).
+    #[serde(default)]
+    pub nome_unidade: Option<String>,
+    // O PNCP manda esse código às vezes como texto ("3506003"), às vezes como
+    // número — Value aceita os dois em vez de derrubar a página inteira.
+    #[serde(default)]
+    pub codigo_ibge: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -60,11 +88,18 @@ pub struct OrgaoEntidade {
     pub razao_social: Option<String>,
     #[serde(default)]
     pub cnpj: Option<String>,
+    // "M"/"E"/"F" — municipal, estadual ou federal.
+    #[serde(default)]
+    pub esfera_id: Option<String>,
 }
 
 /// Contrato final consumido pela SPA (`web/`). Nomes de campo em snake_case
 /// já batem com o JSON esperado, sem necessidade de rename.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// **Todo campo novo precisa de `#[serde(default)]`**: o `main` trata JSON
+/// anterior ilegível como erro fatal de propósito, e a primeira execução após
+/// um campo novo lê o arquivo de ontem, que ainda não o tem.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Licitacao {
     pub id: String,
     pub objeto: String,
@@ -78,6 +113,45 @@ pub struct Licitacao {
     pub link: String,
     pub link_pncp: String,
     pub visto: String,
+    #[serde(default)]
+    pub srp: bool,
+    #[serde(default)]
+    pub esfera: String,
+    #[serde(default)]
+    pub unidade: String,
+    #[serde(default)]
+    pub ibge: String,
+    #[serde(default)]
+    pub publicado: String,
+    #[serde(default)]
+    pub disputa: String,
+    #[serde(default)]
+    pub situacao: String,
+    #[serde(default)]
+    pub amparo: String,
+    #[serde(default)]
+    pub modalidade_id: Option<u32>,
+    // Preenchidos pelo módulo `itens` (não vêm na consulta principal) e
+    // preservados pelo merge, que é o que torna o enriquecimento incremental.
+    #[serde(default)]
+    pub tipo: String,
+    #[serde(default)]
+    pub beneficio: String,
+    #[serde(default)]
+    pub criterio: String,
+    #[serde(default)]
+    pub itens: Vec<ItemResumo>,
+}
+
+/// O que interessa de cada item para a tela: em edital com orçamento sigiloso,
+/// descrição e quantidade continuam públicas mesmo com o valor zerado.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ItemResumo {
+    pub descricao: String,
+    pub quantidade: f64,
+    pub unidade: String,
+    pub valor_unitario: Option<f64>,
+    pub tipo: String,
 }
 
 /// Converte um item bruto da API no contrato da SPA. `visto` fica vazio aqui
@@ -94,7 +168,10 @@ pub fn normalize(item: &ItemPncp) -> Licitacao {
     Licitacao {
         id: item.numero_controle_pncp.clone(),
         objeto: item.objeto_compra.clone().unwrap_or_default(),
-        valor: item.valor_total_estimado,
+        // Valor 0 significa orçamento sigiloso/não informado, não R$ 0 — tratar
+        // como número faria a tela exibir "R$ 0,00" e o filtro de valor
+        // descartar 7,7% dos editais em silêncio.
+        valor: item.valor_total_estimado.filter(|v| *v > 0.0),
         uf: item.unidade_orgao.uf_sigla.clone().unwrap_or_default(),
         municipio: item.unidade_orgao.municipio_nome.clone().unwrap_or_default(),
         orgao: item.orgao_entidade.razao_social.clone().unwrap_or_default(),
@@ -104,6 +181,32 @@ pub fn normalize(item: &ItemPncp) -> Licitacao {
         link: item.link_sistema_origem.clone().unwrap_or_default(),
         link_pncp,
         visto: String::new(),
+        srp: item.srp.unwrap_or(false),
+        esfera: match item.orgao_entidade.esfera_id.as_deref() {
+            Some("M") => "Municipal".to_string(),
+            Some("E") => "Estadual".to_string(),
+            Some("F") => "Federal".to_string(),
+            outro => outro.unwrap_or_default().to_string(),
+        },
+        unidade: item.unidade_orgao.nome_unidade.clone().unwrap_or_default(),
+        ibge: match &item.unidade_orgao.codigo_ibge {
+            Some(serde_json::Value::String(s)) => s.clone(),
+            Some(serde_json::Value::Number(n)) => n.to_string(),
+            _ => String::new(),
+        },
+        publicado: item.data_publicacao_pncp.clone().unwrap_or_default(),
+        disputa: item.modo_disputa_nome.clone().unwrap_or_default(),
+        situacao: item.situacao_compra_nome.clone().unwrap_or_default(),
+        amparo: item
+            .amparo_legal
+            .as_ref()
+            .and_then(|a| a.nome.clone())
+            .unwrap_or_default(),
+        modalidade_id: item.modalidade_id,
+        tipo: String::new(),
+        beneficio: String::new(),
+        criterio: String::new(),
+        itens: Vec::new(),
     }
 }
 
@@ -190,7 +293,7 @@ pub fn buscar(ufs: &[String], modalidades: &[u32], dias_a_frente: i64) -> (Vec<L
 
 /// Timeout explícito: sem ele uma conexão pendurada consumiria os 30 minutos
 /// do job no Actions sem gravar nada.
-fn agente() -> ureq::Agent {
+pub(crate) fn agente() -> ureq::Agent {
     ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(15))
         // 120s porque o PNCP lento responde (mesmo que com erro) em 30-70s:
@@ -209,7 +312,7 @@ const ESPERA_TIMEOUT: [u64; 2] = [180, 300];
 
 /// Repete a mesma página enquanto houver espera prevista para aquele tipo de
 /// falha. `4xx` é parâmetro inválido nosso: repetir não conserta.
-fn chamar(montar: impl Fn() -> ureq::Request) -> Result<ureq::Response, Box<dyn Error>> {
+pub(crate) fn chamar(montar: impl Fn() -> ureq::Request) -> Result<ureq::Response, Box<dyn Error>> {
     let mut tentativa = 0usize;
     loop {
         let erro = match montar().call() {

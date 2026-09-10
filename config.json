@@ -5,5 +5,7 @@
   "manter_vencidas_por_dias": 30,
   "saida": "web/public/data/licitacoes.json",
   "valor_max": null,
-  "palavras_chave": []
+  "palavras_chave": [],
+  "enriquecer": true,
+  "enriquecer_max": 4000
 }

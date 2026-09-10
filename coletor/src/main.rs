@@ -1,3 +1,4 @@
+use coletor::itens;
 use coletor::merge;
 use coletor::pncp::{self, Licitacao};
 use serde::{Deserialize, Serialize};
@@ -6,6 +7,8 @@ use std::error::Error;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process;
+use std::thread;
+use std::time::Duration;
 
 #[derive(Debug, Deserialize)]
 struct Config {
@@ -19,6 +22,11 @@ struct Config {
     valor_max: Option<f64>,
     #[serde(default)]
     palavras_chave: Vec<String>,
+    // Enriquecimento com os itens de cada edital (serviço/material, ME/EPP).
+    #[serde(default)]
+    enriquecer: bool,
+    #[serde(default)]
+    enriquecer_max: usize,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -29,6 +37,56 @@ struct Saida {
     #[serde(default)]
     avisos: Vec<String>,
     licitacoes: Vec<Licitacao>,
+}
+
+/// Busca os itens (serviço/material, ME/EPP) de quem ainda não tem. Roda
+/// **depois** do merge, então só paga pelo que é realmente novo: quem já foi
+/// enriquecido ontem chegou aqui com `tipo` preenchido.
+fn enriquecer(licitacoes: &mut [Licitacao], hoje: &str, maximo: usize) {
+    let mut feitos = 0;
+    let mut falhas = 0;
+
+    for lic in licitacoes.iter_mut() {
+        if feitos >= maximo {
+            break;
+        }
+        if !lic.tipo.is_empty() {
+            continue;
+        }
+        // Edital encerrado não vale o request: está na base só como histórico.
+        if lic.encerramento.as_str() < hoje {
+            continue;
+        }
+        let Some((cnpj, ano, seq)) = itens::coordenadas(&lic.link_pncp) else {
+            continue;
+        };
+
+        match itens::buscar(&cnpj, &ano, &seq) {
+            Ok(e) => {
+                lic.tipo = e.tipo;
+                lic.beneficio = e.beneficio;
+                lic.criterio = e.criterio;
+                lic.itens = e.itens;
+            }
+            Err(e) => {
+                // 404 é resposta definitiva ("não há itens publicados"), não
+                // falha a repetir: sem o sentinela o registro voltaria para
+                // esta fila todos os dias.
+                if e.to_string().contains("404") {
+                    let vazio = itens::vazio();
+                    lic.tipo = vazio.tipo;
+                } else {
+                    falhas += 1;
+                    eprintln!("aviso: itens de {}: {e}", lic.id);
+                }
+            }
+        }
+
+        feitos += 1;
+        thread::sleep(Duration::from_millis(500));
+    }
+
+    eprintln!("enriquecidos: {feitos} (falhas: {falhas})");
 }
 
 fn main() {
@@ -85,6 +143,11 @@ fn executar() -> Result<(), Box<dyn Error>> {
         .format(time::macros::format_description!("[year]-[month]-[day]"))?;
 
     let mut licitacoes = merge::merge(novas, anteriores, &hoje, config.manter_vencidas_por_dias);
+
+    if config.enriquecer {
+        enriquecer(&mut licitacoes, &hoje, config.enriquecer_max);
+    }
+
     licitacoes.sort_by(|a, b| a.encerramento.cmp(&b.encerramento));
 
     let saida = Saida {

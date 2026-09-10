@@ -16,9 +16,13 @@ pub fn merge(
     manter_vencidas_por_dias: i64,
 ) -> Vec<Licitacao> {
     let hoje_data = parse_data(hoje);
-    let visto_antigo: HashMap<&str, &str> = anteriores
+    // Guarda o registro anterior inteiro, não só o `visto`: o enriquecimento de
+    // itens (tipo, benefício ME/EPP, critério) custa um request por edital, e a
+    // API devolve os mesmos editais todos os dias. Reaproveitar aqui é o que
+    // torna esse custo incremental em vez de diário.
+    let antigo: HashMap<&str, &Licitacao> = anteriores
         .iter()
-        .map(|lic| (lic.id.as_str(), lic.visto.as_str()))
+        .map(|lic| (lic.id.as_str(), lic))
         .collect();
     // Clonado de propósito: `novas` é consumido logo abaixo e o conjunto
     // precisa sobreviver ao move.
@@ -27,10 +31,17 @@ pub fn merge(
     let mut resultado: Vec<Licitacao> = novas
         .into_iter()
         .map(|mut lic| {
-            if let Some(&visto) = visto_antigo.get(lic.id.as_str()) {
-                lic.visto = visto.to_string();
-            } else {
-                lic.visto = hoje.to_string();
+            match antigo.get(lic.id.as_str()) {
+                Some(anterior) => {
+                    lic.visto = anterior.visto.clone();
+                    if !anterior.tipo.is_empty() {
+                        lic.tipo = anterior.tipo.clone();
+                        lic.beneficio = anterior.beneficio.clone();
+                        lic.criterio = anterior.criterio.clone();
+                        lic.itens = anterior.itens.clone();
+                    }
+                }
+                None => lic.visto = hoje.to_string(),
             }
             lic
         })

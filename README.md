@@ -28,6 +28,8 @@ prazo) ficam na própria tela e são salvos no navegador.
 | `manter_vencidas_por_dias` | quanto tempo um edital encerrado continua na tela como histórico |
 | `valor_max` | teto opcional; `null` não filtra. Valor **ausente** nunca reprova — dispensa quase sempre vem sem valor estimado |
 | `palavras_chave` | lista opcional; vazia não filtra. Casa contra o objeto, sem diferenciar maiúsculas |
+| `enriquecer` | busca os itens de cada edital para saber **Serviço ou Material** e **exclusividade ME/EPP** (1 request por edital, só para quem ainda não tem) |
+| `enriquecer_max` | teto de enriquecimentos por execução, para o job não estourar o tempo |
 
 Os dois últimos nascem desligados de propósito: primeiro ver o volume geral, depois cortar.
 
