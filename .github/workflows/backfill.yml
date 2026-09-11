@@ -1,0 +1,80 @@
+name: backfill
+
+# Só manual: preenche o histórico um mês por vez, de trás para a frente.
+on:
+  workflow_dispatch:
+    inputs:
+      mes:
+        description: "Mês a preencher (AAAA-MM)"
+        required: true
+
+permissions:
+  contents: write
+
+# Coleta e enriquecimento escrevem no mesmo branch `dados`: sem o grupo
+# compartilhado, um sobrescreve a publicacao do outro.
+concurrency:
+  group: dados
+  cancel-in-progress: false
+
+jobs:
+  coletar:
+    runs-on: ubuntu-latest
+    # Um request por edital com 0,5s entre eles: o teto é enriquecer_max.
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+
+      # Os dados vivem num branch órfão, fora do histórico do código. Sem
+      # trazê-los para cá, o coletor acharia que não conhece nada e refaria o
+      # enriquecimento inteiro, marcando todo edital como novo.
+      - name: Recuperar dados da execução anterior
+        run: |
+          mkdir -p web/public/data
+          if git fetch --depth 1 origin dados 2>/dev/null; then
+            git archive FETCH_HEAD | tar -x -C web/public/data
+            echo "dados anteriores: $(ls web/public/data/*.json | wc -l) arquivos"
+          else
+            echo "branch dados ainda não existe — primeira execução particionada"
+          fi
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          workspaces: coletor
+
+      - name: Testes do coletor
+        working-directory: coletor
+        run: cargo test --release
+
+      - name: Backfill do mês
+        env:
+          MODO: backfill
+          MES: ${{ inputs.mes }}
+        run: cargo run --release --manifest-path coletor/Cargo.toml
+
+      - name: Medir a saída
+        run: |
+          {
+            echo "### Backfill ${{ inputs.mes }}"
+            echo '```'
+            cat web/public/data/index.json | head -c 400
+            echo
+            echo '```'
+            echo "| arquivo | bytes |"
+            echo "|---|---|"
+            du -b web/public/data/*.json | sort -rn -k1 | head -8 | awk '{print "| "$2" | "$1" |"}'
+          } >> $GITHUB_STEP_SUMMARY
+
+      # Um único commit, sempre reescrito: o arquivo de dados muda inteiro todo
+      # dia, e acumular isso no histórico somaria dezenas de MB por execução.
+      - name: Publicar no branch dados
+        run: |
+          cd web/public/data
+          git init -q .
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "backfill ${{ inputs.mes }} $(date -u +%Y-%m-%dT%H:%MZ)"
+          git push -q --force "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}" HEAD:dados
+          echo "publicado em https://raw.githubusercontent.com/${{ github.repository }}/dados/index.json"

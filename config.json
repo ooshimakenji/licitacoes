@@ -9,9 +9,19 @@
     "SP"
   ],
   "modalidades": [
+    1,
+    2,
+    3,
+    4,
+    5,
     6,
+    7,
     8,
-    9
+    9,
+    10,
+    11,
+    12,
+    13
   ],
   "dias_a_frente": 90,
   "manter_vencidas_por_dias": 30,
@@ -20,5 +30,6 @@
   "palavras_chave": [],
   "enriquecer": true,
   "enriquecer_max": 4000,
-  "minutos_max": 45
+  "minutos_max": 45,
+  "dias_delta": 2
 }

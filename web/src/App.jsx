@@ -21,7 +21,7 @@ import Filtros from './Filtros.jsx';
 import Resultados from './Resultados.jsx';
 import { ALVO_TOQUE } from './theme.js';
 import { AREAS, UF_PARA_REGIAO } from './areas.js';
-import { carregarIndex, carregarUfs } from './dados.js';
+import { carregarIndex, carregarUfs, carregarHistorico } from './dados.js';
 
 const FILTROS_KEY = 'licitacoes:filtros';
 const TRIAGEM_KEY = 'licitacoes:triagem';
@@ -46,6 +46,7 @@ const FILTROS_PADRAO = {
   diasMax: '',
   triagemView: 'ocultar-descartadas',
   objetoCompleto: false,
+  incluirHistorico: false,
 };
 
 function lerLocalStorage(chave, padrao) {
@@ -159,9 +160,21 @@ export default function App() {
     }
     let cancelado = false;
     setCarregandoUfs(true);
-    carregarUfs(ufsParaCarregar)
-      .then((lics) => {
-        if (!cancelado) setLicitacoes(lics);
+
+    const meses = (indice.meses || []).slice(0, 12);
+    const pedido = filtros.incluirHistorico
+      ? Promise.all([carregarUfs(ufsParaCarregar), carregarHistorico(ufsParaCarregar, meses)])
+      : Promise.all([carregarUfs(ufsParaCarregar), Promise.resolve([])]);
+
+    pedido
+      .then(([abertos, historico]) => {
+        if (cancelado) return;
+        // O mesmo edital está no arquivo de abertos E no mês em que foi
+        // publicado. Sem deduplicar por id, ligar o histórico mostraria tudo
+        // duas vezes — e o de `abertos` é o que tem itens e enriquecimento.
+        const porId = new Map(historico.map((l) => [l.id, l]));
+        for (const l of abertos) porId.set(l.id, l);
+        setLicitacoes([...porId.values()]);
       })
       .finally(() => {
         if (!cancelado) setCarregandoUfs(false);
@@ -169,7 +182,7 @@ export default function App() {
     return () => {
       cancelado = true;
     };
-  }, [indice, ufsParaCarregar]);
+  }, [indice, ufsParaCarregar, filtros.incluirHistorico]);
 
   useEffect(() => gravarLocalStorage(FILTROS_KEY, filtros), [filtros]);
   useEffect(() => gravarLocalStorage(TRIAGEM_KEY, triagem), [triagem]);

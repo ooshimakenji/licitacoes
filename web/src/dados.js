@@ -6,36 +6,57 @@
 // não engorda dezenas de MB por dia.
 const RAW = 'https://raw.githubusercontent.com/ooshimakenji/licitacoes/dados';
 
-// Em dev tenta o diretório local primeiro (permite mexer nos dados à mão) e
-// cai para o raw quando não há coleta local — senão `npm run dev` num clone
-// novo abriria a tela vazia.
-async function json(arquivo) {
-  if (import.meta.env.DEV) {
-    try {
-      const local = await fetch(`data/${arquivo}`);
-      if (local.ok) return local.json();
-    } catch {
-      /* sem coleta local: segue para o raw */
-    }
-  }
-  const r = await fetch(`${RAW}/${arquivo}`);
-  if (!r.ok) throw new Error(`${arquivo}: ${r.status}`);
-  return r.json();
+/// Os arquivos grandes vão comprimidos: medi 93% de redução nestes dados, o que
+/// é a diferença entre baixar 5 MB e 350 KB por UF. `DecompressionStream` é
+/// nativo do navegador — nada de biblioteca.
+async function descomprimir(resposta) {
+  const fluxo = resposta.body.pipeThrough(new DecompressionStream('gzip'));
+  return new Response(fluxo).json();
 }
 
-export const carregarIndex = () => json('index.json');
+async function buscar(arquivo) {
+  const caminhos = import.meta.env.DEV ? [`data/${arquivo}`, `${RAW}/${arquivo}`] : [`${RAW}/${arquivo}`];
+  for (const caminho of caminhos) {
+    try {
+      const r = await fetch(caminho);
+      if (!r.ok) continue;
+      return caminho.endsWith('.gz') ? descomprimir(r) : r.json();
+    } catch {
+      /* tenta o próximo caminho */
+    }
+  }
+  throw new Error(`${arquivo}: não encontrado`);
+}
 
-/// Baixa só as UFs pedidas. Uma UF que ainda não existe no branch (nenhum
-/// edital hoje) não pode derrubar as outras, então falha vira lista vazia.
+export const carregarIndex = () => buscar('index.json');
+
+/// Editais com proposta aberta — o que a tela mostra por padrão. Uma UF sem
+/// arquivo (nenhum edital hoje) não pode derrubar as outras.
 export async function carregarUfs(ufs) {
   const partes = await Promise.all(
     ufs.map((uf) =>
-      json(`${uf}.json`)
+      buscar(`abertos/${uf}.json.gz`)
         .then((d) => d.licitacoes || [])
         .catch(() => []),
     ),
   );
   return partes.flat();
+}
+
+/// Histórico: tudo que foi publicado naquele mês, aberto ou não. É o que enxerga
+/// a dispensa de cidade pequena, que abre e fecha entre duas coletas.
+export async function carregarHistorico(ufs, meses) {
+  const pedidos = [];
+  for (const uf of ufs) {
+    for (const mes of meses) {
+      pedidos.push(
+        buscar(`${mes}/${uf}.json.gz`)
+          .then((d) => d.licitacoes || [])
+          .catch(() => []),
+      );
+    }
+  }
+  return (await Promise.all(pedidos)).flat();
 }
 
 // Os itens vivem em arquivo separado — só de SP eles respondiam por metade dos
@@ -48,7 +69,7 @@ export function carregarItens(uf) {
   if (!cacheItens.has(uf)) {
     cacheItens.set(
       uf,
-      json(`itens/${uf}.json`).catch(() => ({})),
+      buscar(`itens/${uf}.json.gz`).catch(() => ({})),
     );
   }
   return cacheItens.get(uf);

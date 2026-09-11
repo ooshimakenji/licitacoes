@@ -7,6 +7,12 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 const BASE_URL: &str = "https://pncp.gov.br/api/consulta/v1/contratacoes/proposta";
+// Tudo que foi PUBLICADO num intervalo, esteja a proposta aberta ou não. É o
+// que enxerga a dispensa de cidade pequena, que abre e fecha entre duas
+// coletas: em MG foram 4.395 publicadas em 30 dias contra 361 com proposta
+// aberta na nossa base — víamos 8%.
+const BASE_URL_PUBLICACAO: &str =
+    "https://pncp.gov.br/api/consulta/v1/contratacoes/publicacao";
 // O manual do PNCP diz máximo 500, mas a API real responde 400 "Tamanho de
 // página inválido" acima de 50 (testado em 09/09/2026: 51 já reprova).
 const TAMANHO_PAGINA: u32 = 50;
@@ -30,13 +36,21 @@ pub struct ItemPncp {
     // inexigibilidade: um único item assim derrubaria a página inteira.
     #[serde(default)]
     pub data_abertura_proposta: Option<String>,
-    pub data_encerramento_proposta: String,
+    // Na consulta de proposta aberta o encerramento sempre vem (é o filtro),
+    // mas na consulta por publicação ele chega null — e como String obrigatória
+    // isso derrubava a página inteira de 50 registros.
+    #[serde(default)]
+    pub data_encerramento_proposta: Option<String>,
+    #[serde(default)]
     pub unidade_orgao: UnidadeOrgao,
+    #[serde(default)]
     pub orgao_entidade: OrgaoEntidade,
     // "PNCP" vem todo maiúsculo no JSON — não segue camelCase padrão, exige rename explícito.
-    #[serde(rename = "numeroControlePNCP")]
+    #[serde(rename = "numeroControlePNCP", default)]
     pub numero_controle_pncp: String,
+    #[serde(default)]
     pub ano_compra: i32,
+    #[serde(default)]
     pub sequencial_compra: u64,
     #[serde(default)]
     pub modalidade_nome: Option<String>,
@@ -64,7 +78,7 @@ pub struct AmparoLegal {
     pub nome: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UnidadeOrgao {
     #[serde(default)]
@@ -81,7 +95,7 @@ pub struct UnidadeOrgao {
     pub codigo_ibge: Option<serde_json::Value>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OrgaoEntidade {
     #[serde(default)]
@@ -177,7 +191,7 @@ pub fn normalize(item: &ItemPncp) -> Licitacao {
         orgao: item.orgao_entidade.razao_social.clone().unwrap_or_default(),
         modalidade: item.modalidade_nome.clone().unwrap_or_default(),
         abertura: item.data_abertura_proposta.clone().unwrap_or_default(),
-        encerramento: item.data_encerramento_proposta.clone(),
+        encerramento: item.data_encerramento_proposta.clone().unwrap_or_default(),
         link: item.link_sistema_origem.clone().unwrap_or_default(),
         link_pncp,
         visto: String::new(),
@@ -279,11 +293,33 @@ const FALHAS_PARA_DESISTIR: u32 = 3;
 /// a paciência fica para a segunda passada, que só refaz o que faltou.
 const PACIENCIA_PRIMEIRA_PASSADA: u64 = 45;
 
+/// Proposta aberta agora — a visão principal da tela.
 pub fn buscar(
     ufs: &[String],
     modalidades: &[u32],
     dias_a_frente: i64,
     minutos_max: u64,
+) -> (Vec<Licitacao>, Vec<Falha>) {
+    varrer(ufs, modalidades, dias_a_frente, minutos_max, None)
+}
+
+/// Tudo publicado entre `de` e `ate` (AAAAMMDD), aberto ou não.
+pub fn buscar_publicados(
+    ufs: &[String],
+    modalidades: &[u32],
+    de: &str,
+    ate: &str,
+    minutos_max: u64,
+) -> (Vec<Licitacao>, Vec<Falha>) {
+    varrer(ufs, modalidades, 0, minutos_max, Some((de, ate)))
+}
+
+fn varrer(
+    ufs: &[String],
+    modalidades: &[u32],
+    dias_a_frente: i64,
+    minutos_max: u64,
+    periodo: Periodo,
 ) -> (Vec<Licitacao>, Vec<Falha>) {
     let mut licitacoes = Vec::new();
     let mut falhas: Vec<Falha> = Vec::new();
@@ -331,7 +367,9 @@ pub fn buscar(
                 prazo.min(Instant::now() + Duration::from_secs(PACIENCIA_PRIMEIRA_PASSADA))
             };
 
-            if let Err(e) = buscar_uf_modalidade(uf, modalidade, &data_final, &mut licitacoes, prazo_efetivo) {
+            if let Err(e) =
+                buscar_uf_modalidade(uf, modalidade, &data_final, &mut licitacoes, prazo_efetivo, periodo)
+            {
                 // Detalhe técnico vai para o log do job; a mensagem curta é
                 // derivada da falha na hora de gravar e aparece na tela. Uma
                 // modalidade inteira que falha (o pregão sumiu assim em 3 das 4
@@ -374,7 +412,7 @@ pub fn buscar(
     let mut ainda_falham = Vec::new();
     for falha in falhas {
         let uf = falha.uf.as_deref();
-        match buscar_uf_modalidade(uf, falha.modalidade, &data_final, &mut licitacoes, prazo) {
+        match buscar_uf_modalidade(uf, falha.modalidade, &data_final, &mut licitacoes, prazo, periodo) {
             Ok(()) => eprintln!(
                 "segunda passada recuperou uf={} modalidade={}",
                 uf.unwrap_or("BR"),
@@ -453,23 +491,33 @@ pub(crate) fn chamar(
     }
 }
 
+/// Intervalo de publicação. `None` = consulta de proposta aberta.
+pub type Periodo<'a> = Option<(&'a str, &'a str)>;
+
 fn buscar_uf_modalidade(
     uf: Option<&str>,
     modalidade: u32,
     data_final: &str,
     licitacoes: &mut Vec<Licitacao>,
     prazo: Instant,
+    periodo: Periodo,
 ) -> Result<(), Box<dyn Error>> {
     let mut pagina = 1u32;
     loop {
         let http = chamar(
             || {
-                let req = agente()
-                .get(BASE_URL)
-                .query("dataFinal", data_final)
+                // Mesma paginação e mesmos campos nos dois endpoints; muda a
+                // pergunta: "o que está aberto" contra "o que foi publicado".
+                let req = match periodo {
+                    Some((de, ate)) => agente()
+                        .get(BASE_URL_PUBLICACAO)
+                        .query("dataInicial", de)
+                        .query("dataFinal", ate),
+                    None => agente().get(BASE_URL).query("dataFinal", data_final),
+                }
                 .query("codigoModalidadeContratacao", &modalidade.to_string())
                 .query("pagina", &pagina.to_string())
-                    .query("tamanhoPagina", &TAMANHO_PAGINA.to_string());
+                .query("tamanhoPagina", &TAMANHO_PAGINA.to_string());
                 match uf {
                     Some(uf) => req.query("uf", uf),
                     None => req,
@@ -486,7 +534,15 @@ fn buscar_uf_modalidade(
 
         let resposta: RespostaPncp = http.into_json()?;
 
-        licitacoes.extend(resposta.data.iter().map(normalize));
+        // Sem id não dá para deduplicar nem casar com o histórico; melhor
+        // descartar o registro do que poluir a base com um sem chave.
+        licitacoes.extend(
+            resposta
+                .data
+                .iter()
+                .map(normalize)
+                .filter(|l| !l.id.trim().is_empty()),
+        );
 
         // `data` vazio também encerra: se a API errar o `paginasRestantes`,
         // o laço pararia de qualquer forma em vez de girar para sempre.

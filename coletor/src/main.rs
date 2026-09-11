@@ -2,7 +2,11 @@ use coletor::itens;
 use coletor::merge;
 use coletor::pncp::{self, ItemResumo, Licitacao};
 use serde::{Deserialize, Serialize};
+use flate2::write::GzEncoder;
+use flate2::read::GzDecoder;
+use flate2::Compression;
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::io::{Read, Write};
 use std::error::Error;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -18,6 +22,33 @@ const MAX_ITENS_GRAVADOS: usize = 20;
 /// Onde vai o registro cuja fonte não informou UF (acontece com diário
 /// oficial). Sem isso ele desapareceria na hora de particionar.
 const SEM_UF: &str = "SEM-UF";
+
+/// Editais com proposta aberta agora — o que a tela mostra por padrão.
+const ABERTOS: &str = "abertos";
+const ITENS: &str = "itens";
+
+/// A API do PNCP quer data como AAAAMMDD, sem hífen.
+const FORMATO_API: &[time::format_description::FormatItem] =
+    time::macros::format_description!("[year][month][day]");
+
+/// Grava JSON comprimido. Medido nestes dados: 93% menor, o que é a diferença
+/// entre 615 MB e ~45 MB de histórico anual — e entre baixar 5 MB ou 350 KB por
+/// UF na tela. O navegador descomprime com `DecompressionStream`, nativo.
+fn gravar_gz<T: Serialize>(caminho: &Path, dado: &T) -> Result<u64, Box<dyn Error>> {
+    let mut gz = GzEncoder::new(Vec::new(), Compression::default());
+    gz.write_all(&serde_json::to_vec(dado)?)?;
+    let bytes = gz.finish()?;
+    let tamanho = bytes.len() as u64;
+    fs::write(caminho, bytes)?;
+    Ok(tamanho)
+}
+
+fn ler_gz<T: for<'a> Deserialize<'a>>(caminho: &Path) -> Result<T, Box<dyn Error>> {
+    let comprimido = fs::read(caminho)?;
+    let mut texto = String::new();
+    GzDecoder::new(&comprimido[..]).read_to_string(&mut texto)?;
+    Ok(serde_json::from_str(&texto)?)
+}
 
 /// Registro dentro do escopo de UFs configurado. Sem UF (fonte de diário
 /// oficial) passa sempre: não é "outra UF", é UF desconhecida.
@@ -54,6 +85,10 @@ struct Config {
     enriquecer: bool,
     #[serde(default)]
     enriquecer_max: usize,
+    /// Quantos dias para trás o delta diário cobre. 2 dá folga para fuso e
+    /// para o edital publicado tarde no dia anterior.
+    #[serde(default = "delta_padrao")]
+    dias_delta: i64,
     /// Orçamento de tempo da coleta. Existe porque a API do PNCP cai: sem teto,
     /// as esperas de retry somadas estouravam o job e nada era publicado.
     #[serde(default = "orcamento_padrao")]
@@ -62,6 +97,10 @@ struct Config {
 
 fn orcamento_padrao() -> u64 {
     45
+}
+
+fn delta_padrao() -> i64 {
+    2
 }
 
 /// Um arquivo por UF.
@@ -82,6 +121,8 @@ struct Index {
     /// Quantos ainda não passaram pelo enriquecimento — acompanha a drenagem.
     falta_enriquecer: usize,
     por_uf: BTreeMap<String, usize>,
+    /// Meses de histórico disponíveis, do mais recente para o mais antigo.
+    meses: Vec<String>,
 }
 
 /// Formato antigo (arquivo único). Existe só para a primeira execução
@@ -99,88 +140,104 @@ fn main() {
     }
 }
 
-/// Lê os arquivos por UF da execução anterior. Se não houver nenhum, cai no
-/// arquivo único legado: sem isso, a primeira execução particionada acharia
-/// que não conhece nada, refazendo horas de enriquecimento e marcando todo
-/// edital como NOVA.
+/// Lê os editais com proposta aberta da execução anterior, rejuntando os itens
+/// (que moram em arquivo próprio). Se o layout novo ainda não existe, cai no
+/// layout anterior — `{UF}.json` na raiz —, porque começar do zero significaria
+/// refazer horas de enriquecimento e marcar todo edital como NOVA.
 fn ler_anteriores(dir: &Path) -> Result<Vec<Licitacao>, Box<dyn Error>> {
+    let dir_abertos = dir.join(ABERTOS);
     let mut anteriores = Vec::new();
-    let mut arquivos_uf = 0;
+    let mut achou = 0;
 
-    if dir.exists() {
-        for entrada in fs::read_dir(dir)? {
+    if dir_abertos.exists() {
+        for entrada in fs::read_dir(&dir_abertos)? {
             let caminho = entrada?.path();
-            let nome = caminho.file_stem().and_then(|n| n.to_str()).unwrap_or("");
-            let json = caminho.extension().and_then(|e| e.to_str()) == Some("json");
-            if !json || nome == "index" || nome == "licitacoes" {
+            let uf = nome_uf(&caminho);
+            if uf.is_empty() {
                 continue;
             }
-            let conteudo = fs::read_to_string(&caminho)?;
-            let mut lics = serde_json::from_str::<ArquivoUf>(&conteudo)?.licitacoes;
-
-            // Os itens moram em arquivo próprio desde que o {UF}.json emagreceu.
-            // Sem reassociar aqui, a próxima gravação escreveria itens vazios
-            // para registros que já têm `tipo` — e como a fila de
-            // enriquecimento olha `tipo`, eles nunca voltariam para refazer:
-            // os itens sumiriam de vez, com o job verde.
-            let caminho_itens = dir.join("itens").join(format!("{nome}.json"));
-            if let Ok(bruto) = fs::read_to_string(&caminho_itens) {
-                let mut mapa: HashMap<String, Vec<ItemResumo>> = serde_json::from_str(&bruto)?;
-                for lic in lics.iter_mut() {
-                    if lic.itens.is_empty() {
-                        if let Some(itens) = mapa.remove(&lic.id) {
-                            lic.itens = itens;
-                        }
-                    }
-                }
-            }
-
+            let mut lics: Vec<Licitacao> = ler_gz::<ArquivoUf>(&caminho)?.licitacoes;
+            rejuntar_itens(dir, &uf, &mut lics)?;
             anteriores.extend(lics);
-            arquivos_uf += 1;
+            achou += 1;
         }
     }
 
-    if arquivos_uf > 0 {
-        eprintln!("anteriores: {} registros em {arquivos_uf} arquivos por UF", anteriores.len());
+    if achou > 0 {
+        eprintln!("abertos anteriores: {} registros em {achou} arquivos", anteriores.len());
         return Ok(anteriores);
     }
 
-    if let Ok(conteudo) = fs::read_to_string(dir.join("licitacoes.json")) {
-        let legado = serde_json::from_str::<SaidaLegado>(&conteudo)?.licitacoes;
-        eprintln!("transição: {} registros lidos do arquivo único legado", legado.len());
-        return Ok(legado);
+    // Transição: layout antigo (arquivo por UF na raiz, sem compressão).
+    if dir.exists() {
+        for entrada in fs::read_dir(dir)? {
+            let caminho = entrada?.path();
+            let nome = caminho
+                .file_stem()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .to_string();
+            if caminho.extension().and_then(|e| e.to_str()) != Some("json") || nome == "index" {
+                continue;
+            }
+            let mut lics =
+                serde_json::from_str::<ArquivoUf>(&fs::read_to_string(&caminho)?)?.licitacoes;
+            rejuntar_itens(dir, &nome, &mut lics)?;
+            anteriores.extend(lics);
+            achou += 1;
+        }
     }
-
-    eprintln!("anteriores: nenhum arquivo encontrado — primeira coleta");
-    Ok(Vec::new())
+    if achou > 0 {
+        eprintln!("transição: {} registros lidos do layout antigo", anteriores.len());
+    } else {
+        eprintln!("anteriores: nenhum arquivo encontrado — primeira coleta");
+    }
+    Ok(anteriores)
 }
 
-/// Grava um arquivo por UF e o index. Limpa os `.json` antigos primeiro, senão
-/// uma UF que deixou de ter editais ficaria com dado velho para sempre.
+/// Os itens vivem separados desde que o arquivo por UF emagreceu. Sem reassociar
+/// aqui, a gravação seguinte escreveria itens vazios para registros que já têm
+/// `tipo` — e como a fila de enriquecimento olha `tipo`, eles nunca voltariam:
+/// os itens sumiriam de vez, com o job verde.
+fn rejuntar_itens(dir: &Path, uf: &str, lics: &mut [Licitacao]) -> Result<(), Box<dyn Error>> {
+    let gz = dir.join(ITENS).join(format!("{uf}.json.gz"));
+    let puro = dir.join(ITENS).join(format!("{uf}.json"));
+    let mapa: HashMap<String, Vec<ItemResumo>> = if gz.exists() {
+        ler_gz(&gz)?
+    } else if puro.exists() {
+        serde_json::from_str(&fs::read_to_string(&puro)?)?
+    } else {
+        return Ok(());
+    };
+    for lic in lics.iter_mut() {
+        if lic.itens.is_empty() {
+            if let Some(itens) = mapa.get(&lic.id) {
+                lic.itens = itens.clone();
+            }
+        }
+    }
+    Ok(())
+}
+
+fn nome_uf(caminho: &Path) -> String {
+    caminho
+        .file_name()
+        .and_then(|n| n.to_str())
+        .and_then(|n| n.strip_suffix(".json.gz"))
+        .unwrap_or("")
+        .to_string()
+}
+
+/// Grava os abertos (um arquivo por UF, comprimido) e os itens à parte.
 fn gravar(
     dir: &Path,
     licitacoes: Vec<Licitacao>,
     avisos: Vec<String>,
     gerado_em: &str,
 ) -> Result<(), Box<dyn Error>> {
-    fs::create_dir_all(dir)?;
-    fs::create_dir_all(dir.join("itens"))?;
-
-    // Apaga só o que vai ser reescrito. UF fora do escopo atual fica arquivada
-    // no branch em vez de ser jogada fora: reabrir o escopo depois não deve
-    // custar horas de enriquecimento de novo.
-    let escopo: HashSet<String> = licitacoes
-        .iter()
-        .map(|l| uf_ou_sem(l).to_string())
-        .chain(std::iter::once("index".to_string()))
-        .collect();
-    for entrada in fs::read_dir(dir)? {
-        let caminho = entrada?.path();
-        let nome = caminho.file_stem().and_then(|n| n.to_str()).unwrap_or("").to_string();
-        if caminho.extension().and_then(|e| e.to_str()) == Some("json") && escopo.contains(&nome) {
-            fs::remove_file(caminho)?;
-        }
-    }
+    let dir_abertos = dir.join(ABERTOS);
+    fs::create_dir_all(&dir_abertos)?;
+    fs::create_dir_all(dir.join(ITENS))?;
 
     let total = licitacoes.len();
     let falta_enriquecer = licitacoes.iter().filter(|l| l.tipo.is_empty()).count();
@@ -188,7 +245,20 @@ fn gravar(
     let mut por_uf: BTreeMap<String, Vec<Licitacao>> = BTreeMap::new();
     for mut lic in licitacoes {
         lic.itens.truncate(MAX_ITENS_GRAVADOS);
-        por_uf.entry(uf_ou_sem(&lic).to_string()).or_default().push(lic);
+        por_uf
+            .entry(uf_ou_sem(&lic).to_string())
+            .or_default()
+            .push(lic);
+    }
+
+    // Só as UFs em escopo são reescritas: UF desativada fica arquivada, para
+    // reabrir o escopo não custar horas de enriquecimento de novo.
+    let escopo: HashSet<String> = por_uf.keys().cloned().collect();
+    for entrada in fs::read_dir(&dir_abertos)? {
+        let caminho = entrada?.path();
+        if escopo.contains(&nome_uf(&caminho)) {
+            fs::remove_file(caminho)?;
+        }
     }
 
     let mut contagem = BTreeMap::new();
@@ -196,8 +266,6 @@ fn gravar(
         lics.sort_by(|a, b| a.encerramento.cmp(&b.encerramento));
         contagem.insert(uf.clone(), lics.len());
 
-        // Os itens saem do arquivo principal: só de SP eles respondiam por
-        // metade dos 8,3 MB, e a tela só precisa deles ao expandir uma linha.
         let mut itens: HashMap<String, Vec<ItemResumo>> = HashMap::new();
         for lic in lics.iter_mut() {
             if !lic.itens.is_empty() {
@@ -205,35 +273,141 @@ fn gravar(
             }
         }
 
-        let caminho = dir.join(format!("{uf}.json"));
-        fs::write(
-            &caminho,
-            serde_json::to_string(&ArquivoUf {
+        let n = lics.len();
+        let bytes = gravar_gz(
+            &dir_abertos.join(format!("{uf}.json.gz")),
+            &ArquivoUf {
                 gerado_em: gerado_em.to_string(),
                 licitacoes: lics,
-            })?,
+            },
         )?;
-        let caminho_itens = dir.join("itens").join(format!("{uf}.json"));
-        fs::write(&caminho_itens, serde_json::to_string(&itens)?)?;
-
-        eprintln!(
-            "  {uf}: {} editais, {} bytes (+ {} bytes de itens)",
-            contagem[&uf],
-            fs::metadata(&caminho)?.len(),
-            fs::metadata(&caminho_itens)?.len()
-        );
+        let bytes_itens = gravar_gz(&dir.join(ITENS).join(format!("{uf}.json.gz")), &itens)?;
+        eprintln!("  abertos {uf}: {n} editais, {bytes} B (+ {bytes_itens} B de itens)");
     }
+
+    limpar_layout_antigo(dir)?;
+    gravar_index(dir, gerado_em, total, falta_enriquecer, contagem, avisos)?;
+    eprintln!("gravadas: {total} abertas ({falta_enriquecer} ainda sem enriquecimento)");
+    Ok(())
+}
+
+/// O layout antigo sai do caminho na mesma execução: deixar os dois conviverem
+/// faria a tela ler dado velho dependendo do caminho que pedisse.
+fn limpar_layout_antigo(dir: &Path) -> Result<(), Box<dyn Error>> {
+    for entrada in fs::read_dir(dir)? {
+        let caminho = entrada?.path();
+        let nome = caminho.file_stem().and_then(|n| n.to_str()).unwrap_or("");
+        if caminho.extension().and_then(|e| e.to_str()) == Some("json") && nome != "index" {
+            fs::remove_file(caminho)?;
+        }
+    }
+    let itens = dir.join(ITENS);
+    if itens.exists() {
+        for entrada in fs::read_dir(&itens)? {
+            let caminho = entrada?.path();
+            if caminho.extension().and_then(|e| e.to_str()) == Some("json") {
+                fs::remove_file(caminho)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Anexa os publicados ao arquivo do mês correspondente, deduplicando por id —
+/// repetir o delta do mesmo dia, ou passar o backfill por cima, não pode dobrar
+/// o mês.
+fn anexar_mes(
+    dir: &Path,
+    publicados: Vec<Licitacao>,
+    gerado_em: &str,
+) -> Result<(), Box<dyn Error>> {
+    let mut por_mes: BTreeMap<(String, String), Vec<Licitacao>> = BTreeMap::new();
+    for mut lic in publicados {
+        // Histórico não guarda itens: enriquecer centenas de milhares de
+        // editais levaria centenas de horas e não é o objetivo deles.
+        lic.itens.clear();
+        let mes = mes_de(&lic);
+        por_mes
+            .entry((mes, uf_ou_sem(&lic).to_string()))
+            .or_default()
+            .push(lic);
+    }
+
+    for ((mes, uf), novos) in por_mes {
+        let dir_mes = dir.join(&mes);
+        fs::create_dir_all(&dir_mes)?;
+        let caminho = dir_mes.join(format!("{uf}.json.gz"));
+
+        let mut registros: Vec<Licitacao> = if caminho.exists() {
+            ler_gz::<ArquivoUf>(&caminho)?.licitacoes
+        } else {
+            Vec::new()
+        };
+        let conhecidos: HashSet<String> = registros.iter().map(|l| l.id.clone()).collect();
+        let antes = registros.len();
+        registros.extend(novos.into_iter().filter(|l| !conhecidos.contains(&l.id)));
+        registros.sort_by(|a, b| b.publicado.cmp(&a.publicado));
+
+        let n = registros.len();
+        let bytes = gravar_gz(
+            &caminho,
+            &ArquivoUf {
+                gerado_em: gerado_em.to_string(),
+                licitacoes: registros,
+            },
+        )?;
+        eprintln!("  {mes}/{uf}: {n} editais ({} novos), {bytes} B", n - antes);
+    }
+    Ok(())
+}
+
+/// Mês de publicação (AAAA-MM). Sem data de publicação, cai no encerramento —
+/// e só então numa gaveta à parte, para o registro nunca sumir.
+fn mes_de(lic: &Licitacao) -> String {
+    for campo in [&lic.publicado, &lic.encerramento] {
+        if campo.len() >= 7 {
+            return campo[..7].to_string();
+        }
+    }
+    "sem-data".to_string()
+}
+
+fn gravar_index(
+    dir: &Path,
+    gerado_em: &str,
+    total: usize,
+    falta_enriquecer: usize,
+    por_uf: BTreeMap<String, usize>,
+    avisos: Vec<String>,
+) -> Result<(), Box<dyn Error>> {
+    // Meses existentes no disco: é o que a tela oferece como histórico.
+    let mut meses: Vec<String> = Vec::new();
+    for entrada in fs::read_dir(dir)? {
+        let caminho = entrada?.path();
+        if !caminho.is_dir() {
+            continue;
+        }
+        let nome = caminho
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("")
+            .to_string();
+        if nome.len() == 7 && nome.as_bytes()[4] == b'-' {
+            meses.push(nome);
+        }
+    }
+    meses.sort();
+    meses.reverse();
 
     let index = Index {
         gerado_em: gerado_em.to_string(),
         avisos,
         total,
         falta_enriquecer,
-        por_uf: contagem,
+        por_uf,
+        meses,
     };
     fs::write(dir.join("index.json"), serde_json::to_string(&index)?)?;
-    eprintln!("gravadas: {total} editais ({falta_enriquecer} ainda sem enriquecimento)");
-
     Ok(())
 }
 
@@ -321,9 +495,12 @@ mod testes {
         )
         .expect("deve gravar");
 
-        assert!(dir.join("SP.json").exists());
-        assert!(dir.join("SC.json").exists());
-        assert!(dir.join("SEM-UF.json").exists(), "registro sem UF não pode desaparecer");
+        assert!(dir.join("abertos/SP.json.gz").exists());
+        assert!(dir.join("abertos/SC.json.gz").exists());
+        assert!(
+            dir.join("abertos/SEM-UF.json.gz").exists(),
+            "registro sem UF não pode desaparecer"
+        );
         assert!(dir.join("index.json").exists());
 
         // O que foi gravado tem que voltar inteiro, senão o merge do dia
@@ -377,6 +554,70 @@ mod testes {
         let relido = ler_anteriores(&dir).unwrap();
         assert_eq!(relido[0].itens.len(), 1, "itens perdidos na segunda gravação");
         assert_eq!(relido[0].itens[0].descricao, "bota de borracha");
+    }
+
+
+    #[test]
+    fn publicado_vai_para_o_mes_e_nao_para_abertos() {
+        let dir = temp("mes");
+        let mut pub1 = lic("p1", "SP");
+        pub1.publicado = "2026-08-14T10:00:00".to_string();
+        pub1.itens = vec![ItemResumo {
+            descricao: "x".into(),
+            quantidade: 1.0,
+            unidade: "UN".into(),
+            valor_unitario: Some(1.0),
+            tipo: "Material".into(),
+        }];
+
+        anexar_mes(&dir, vec![pub1], "2026-09-11T00:00:00Z").unwrap();
+
+        assert!(dir.join("2026-08/SP.json.gz").exists(), "histórico vai para o mês da publicação");
+        assert!(!dir.join("abertos/SP.json.gz").exists(), "histórico não é aberto");
+
+        // Histórico não carrega itens: enriquecer centenas de milhares de
+        // editais levaria centenas de horas, e não é para isso que ele serve.
+        let arq: ArquivoUf = ler_gz(&dir.join("2026-08/SP.json.gz")).unwrap();
+        assert!(arq.licitacoes[0].itens.is_empty());
+    }
+
+    #[test]
+    fn anexar_o_mesmo_dia_duas_vezes_nao_dobra_o_mes() {
+        let dir = temp("dedup-mes");
+        let mut p = lic("mesmo-id", "SC");
+        p.publicado = "2026-09-02T08:00:00".to_string();
+
+        anexar_mes(&dir, vec![p.clone()], "2026-09-11T00:00:00Z").unwrap();
+        anexar_mes(&dir, vec![p], "2026-09-11T00:00:00Z").unwrap();
+
+        let arq: ArquivoUf = ler_gz(&dir.join("2026-09/SC.json.gz")).unwrap();
+        // Sem dedup por id, repetir o delta do dia (ou passar o backfill por
+        // cima) duplicaria cada edital do mês.
+        assert_eq!(arq.licitacoes.len(), 1);
+    }
+
+    #[test]
+    fn transicao_le_o_layout_antigo_sem_compressao() {
+        let dir = temp("transicao");
+        fs::create_dir_all(&dir).unwrap();
+        let antigo = serde_json::json!({
+            "gerado_em": "2026-09-10T00:00:00Z",
+            "licitacoes": [{
+                "id": "velha", "objeto": "o", "valor": null, "uf": "SP", "municipio": "m",
+                "orgao": "o", "modalidade": "Dispensa", "abertura": "", "encerramento": "2026-12-01T09:00:00",
+                "link": "", "link_pncp": "", "visto": "2026-08-01", "tipo": "Material"
+            }]
+        });
+        fs::write(dir.join("SP.json"), antigo.to_string()).unwrap();
+
+        let lidos = ler_anteriores(&dir).expect("deve ler o layout antigo");
+        assert_eq!(lidos.len(), 1);
+        assert_eq!(lidos[0].tipo, "Material");
+
+        // E a gravação seguinte não deixa os dois layouts convivendo.
+        gravar(&dir, lidos, vec![], "2026-09-11T00:00:00Z").unwrap();
+        assert!(!dir.join("SP.json").exists(), "layout antigo tem que sair do caminho");
+        assert!(dir.join("abertos/SP.json.gz").exists());
     }
 
     #[test]
@@ -433,6 +674,13 @@ fn executar() -> Result<(), Box<dyn Error>> {
     let modo = std::env::var("MODO").unwrap_or_default();
     let so_enriquecer = modo == "enriquecer";
     let so_coletar = modo == "coletar";
+
+    // Backfill roda sozinho e só mexe no histórico: pega um mês inteiro de
+    // publicações e anexa ao arquivo daquele mês.
+    if modo == "backfill" {
+        let mes = std::env::var("MES")?;
+        return backfill(&config, &raiz, &mes);
+    }
 
     let (mut novas, falhas) = if so_enriquecer {
         eprintln!("modo: apenas enriquecimento (sem coleta)");
@@ -504,5 +752,64 @@ fn executar() -> Result<(), Box<dyn Error>> {
         time::OffsetDateTime::now_utc().format(&time::format_description::well_known::Rfc3339)?;
     gravar(&dir_saida, licitacoes, avisos, &gerado_em)?;
 
+    // Delta diário: é o que enxerga a dispensa de cidade pequena, que abre e
+    // fecha entre duas coletas. Medido em MG: 4.395 dispensas publicadas em 30
+    // dias contra 361 com proposta aberta — a consulta de "aberto agora" via 8%.
+    if !so_enriquecer {
+        let hoje = time::OffsetDateTime::now_utc().date();
+        let de = (hoje - time::Duration::days(config.dias_delta)).format(FORMATO_API)?;
+        let ate = hoje.format(FORMATO_API)?;
+        eprintln!("delta de publicações: {de} a {ate}");
+
+        let (publicados, falhas) = pncp::buscar_publicados(
+            &config.ufs,
+            &config.modalidades,
+            &de,
+            &ate,
+            config.minutos_max,
+        );
+        for f in &falhas {
+            eprintln!("aviso: delta — {}", f.aviso());
+        }
+        eprintln!("publicados no período: {}", publicados.len());
+        anexar_mes(&dir_saida, publicados, &gerado_em)?;
+    }
+
+    Ok(())
+}
+
+/// Um mês inteiro de publicações, para preencher o histórico de trás para a
+/// frente. Roda em execução própria: são ~1.000 páginas por mês.
+fn backfill(config: &Config, raiz: &Path, mes: &str) -> Result<(), Box<dyn Error>> {
+    let (ano, m) = mes
+        .split_once('-')
+        .ok_or("MES deve estar no formato AAAA-MM")?;
+    let ano: i32 = ano.parse()?;
+    let m: u8 = m.parse()?;
+    let primeiro = time::Date::from_calendar_date(ano, time::Month::try_from(m)?, 1)?;
+    let ultimo = primeiro
+        .replace_day(time::util::days_in_year_month(ano, time::Month::try_from(m)?))?;
+
+    eprintln!("backfill de {mes}: {primeiro} a {ultimo}");
+    let (publicados, falhas) = pncp::buscar_publicados(
+        &config.ufs,
+        &config.modalidades,
+        &primeiro.format(FORMATO_API)?,
+        &ultimo.format(FORMATO_API)?,
+        config.minutos_max,
+    );
+    for f in &falhas {
+        eprintln!("aviso: backfill — {}", f.aviso());
+    }
+    eprintln!("publicados em {mes}: {}", publicados.len());
+
+    let dir_saida = raiz.join(&config.saida_dir);
+    let gerado_em =
+        time::OffsetDateTime::now_utc().format(&time::format_description::well_known::Rfc3339)?;
+    anexar_mes(&dir_saida, publicados, &gerado_em)?;
+
+    // Regrava os abertos sem mudá-los, só para o index passar a listar o mês novo.
+    let abertos = ler_anteriores(&dir_saida)?;
+    gravar(&dir_saida, abertos, Vec::new(), &gerado_em)?;
     Ok(())
 }

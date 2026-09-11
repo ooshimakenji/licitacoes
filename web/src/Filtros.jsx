@@ -133,6 +133,18 @@ export default function Filtros({
           />
         </Stack>
 
+        {/* Por padrão a tela mostra o que dá para disputar. O histórico é o
+            que enxerga a dispensa que abriu e fechou entre duas coletas. */}
+        <FormControlLabel
+          control={
+            <Checkbox
+              checked={filtros.incluirHistorico}
+              onChange={(e) => set('incluirHistorico')(e.target.checked)}
+            />
+          }
+          label="Incluir histórico (editais já encerrados, para pesquisar preço praticado)"
+        />
+
         <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
           <Autocomplete
             multiple

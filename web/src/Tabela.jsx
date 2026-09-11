@@ -51,13 +51,15 @@ function ehNova(visto) {
   return visto === fmt(hoje) || visto === fmt(ontem);
 }
 
+// Larguras pensadas para o objeto sobrar com o máximo: era ele que não cabia e
+// obrigava a passar o mouse em cada linha.
 const CABECALHOS = [
-  { id: 'prazo', label: 'Prazo', ordenavel: true },
-  { id: 'valor', label: 'Valor', ordenavel: true },
-  { id: 'local', label: 'Órgão / Município-UF', ordenavel: true },
-  { id: 'objeto', label: 'Objeto', ordenavel: false },
-  { id: 'links', label: 'Links', ordenavel: false },
-  { id: 'triagem', label: 'Triagem', ordenavel: false },
+  { id: 'prazo', label: 'Prazo', ordenavel: true, largura: 112 },
+  { id: 'valor', label: 'Valor', ordenavel: true, largura: 124 },
+  { id: 'local', label: 'Órgão / Local', ordenavel: true, largura: 168 },
+  { id: 'objeto', label: 'Objeto', ordenavel: false, largura: 'auto' },
+  { id: 'links', label: 'Links', ordenavel: false, largura: 120 },
+  { id: 'triagem', label: 'Triagem', ordenavel: false, largura: 124 },
 ];
 
 export default function Tabela({ rows, triagem, setTriagem, ordem, setOrdem, objetoCompleto }) {
@@ -95,6 +97,7 @@ export default function Tabela({ rows, triagem, setTriagem, ordem, setOrdem, obj
                   key={c.id}
                   component="th"
                   scope="col"
+                  sx={{ width: c.largura }}
                   aria-sort={ordem.coluna === c.id ? (ordem.desc ? 'descending' : 'ascending') : 'none'}
                 >
                   <TableSortLabel
@@ -106,7 +109,7 @@ export default function Tabela({ rows, triagem, setTriagem, ordem, setOrdem, obj
                   </TableSortLabel>
                 </TableCell>
               ) : (
-                <TableCell key={c.id} component="th" scope="col">
+                <TableCell key={c.id} component="th" scope="col" sx={{ width: c.largura }}>
                   {c.label}
                 </TableCell>
               ),
@@ -172,14 +175,15 @@ export default function Tabela({ rows, triagem, setTriagem, ordem, setOrdem, obj
                     </Box>
                   )}
                 </TableCell>
-                <TableCell>
-                  <Typography variant="body2">{item.orgao}</Typography>
-                  <Typography variant="caption" color="text.secondary">
+                <TableCell sx={{ maxWidth: 168 }}>
+                  <Typography variant="body2" noWrap title={item.orgao}>
+                    {item.orgao}
+                  </Typography>
+                  <Typography variant="caption" color="text.secondary" noWrap component="div">
                     {item.municipio}-{item.uf}
-                    {item.esfera ? ` · ${item.esfera}` : ''}
                   </Typography>
                 </TableCell>
-                <TableCell sx={{ maxWidth: objetoCompleto ? 520 : 320 }}>
+                <TableCell sx={{ minWidth: 380 }}>
                   <Tooltip title={objetoCompleto ? '' : item.objeto}>
                     <Typography
                       variant="body2"
@@ -188,7 +192,7 @@ export default function Tabela({ rows, triagem, setTriagem, ordem, setOrdem, obj
                           ? undefined
                           : {
                               display: '-webkit-box',
-                              WebkitLineClamp: 2,
+                              WebkitLineClamp: 3,
                               WebkitBoxOrient: 'vertical',
                               overflow: 'hidden',
                             }
