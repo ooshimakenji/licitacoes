@@ -126,6 +126,7 @@ export default function App() {
   const [carregandoUfs, setCarregandoUfs] = useState(false);
   const [filtrosAbertos, setFiltrosAbertos] = useState(false);
   const [menuOrdem, setMenuOrdem] = useState(null);
+  const [avisosAbertos, setAvisosAbertos] = useState(false);
   const tema = useTheme();
   const estreito = useMediaQuery(tema.breakpoints.down('md'));
 
@@ -400,14 +401,36 @@ export default function App() {
             <>
               {/* Coleta parcial precisa aparecer: sem isso a ausência de uma
                   modalidade inteira passa por "não há licitações hoje". */}
+              {/* Um aviso por UF×modalidade enche a tela: quando a API do PNCP
+                  cai, são 19 linhas antes do primeiro edital. A mensagem vira
+                  uma frase, e a lista completa fica a um clique. */}
               {avisos.length > 0 && (
-                <Alert severity="warning" sx={{ mb: 2 }}>
-                  Coleta incompleta — a lista abaixo pode estar faltando editais:
-                  <Box component="ul" sx={{ m: 0, pl: 3 }}>
-                    {avisos.map((aviso) => (
-                      <li key={aviso}>{aviso}</li>
-                    ))}
-                  </Box>
+                <Alert
+                  severity="warning"
+                  sx={{ mb: 2 }}
+                  action={
+                    avisos.length > 1 && (
+                      <Button
+                        size="small"
+                        color="inherit"
+                        onClick={() => setAvisosAbertos((a) => !a)}
+                        sx={{ minHeight: ALVO_TOQUE }}
+                      >
+                        {avisosAbertos ? 'Ocultar' : 'Ver quais'}
+                      </Button>
+                    )
+                  }
+                >
+                  Coleta incompleta: {avisos.length} consulta
+                  {avisos.length === 1 ? '' : 's'} ao PNCP falhou
+                  {avisos.length === 1 ? '' : 'ram'}, então pode faltar edital na lista.
+                  {avisosAbertos && (
+                    <Box component="ul" sx={{ m: 0, mt: 1, pl: 3 }}>
+                      {avisos.map((aviso) => (
+                        <li key={aviso}>{aviso}</li>
+                      ))}
+                    </Box>
+                  )}
                 </Alert>
               )}
 
