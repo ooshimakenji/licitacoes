@@ -59,7 +59,7 @@ function grupoDe(dias, encerramento) {
 /// Urgência é do grupo, não de cada card: dita uma vez, ela volta a ser sinal.
 const urgenteGrupo = (dias) => dias != null && dias >= 0 && dias <= 3;
 
-export default function Cards({ rows, triagem, setTriagem, objetoCompleto, ordem }) {
+export default function Cards({ rows, triagem, setTriagem, objetoCompleto, ordem, leilao }) {
   const [visiveis, setVisiveis] = useState(POR_LEVA);
   const lista = rows.slice(0, visiveis);
   const agrupado = (ordem?.coluna || 'prazo') === 'prazo';

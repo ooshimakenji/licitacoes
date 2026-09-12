@@ -20,6 +20,11 @@ export const AREAS = {
     'ambiental,residuo,licenciamento,saneamento,esgoto,efluente,arboriza,poda,varricao',
 };
 
+/// Modalidades de leilão no PNCP: eletrônico (1) e presencial (13). Medido na
+/// coleta: 143 no Sul+Sudeste — imóveis, veículos apreendidos, mercadorias da
+/// Receita e concessão de uso, de R$ 2,3 mil a R$ 29 milhões.
+export const MODALIDADES_LEILAO = [1, 13];
+
 // Regiões do IBGE. Usado para filtrar sem depender de coordenada nenhuma.
 const REGIOES = {
   Norte: 'AC,AP,AM,PA,RO,RR,TO',

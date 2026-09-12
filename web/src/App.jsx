@@ -23,7 +23,7 @@ import Filtros from './Filtros.jsx';
 import Resultados from './Resultados.jsx';
 import Concursos from './Concursos.jsx';
 import { ALVO_TOQUE } from './theme.js';
-import { AREAS, UF_PARA_REGIAO } from './areas.js';
+import { AREAS, UF_PARA_REGIAO, MODALIDADES_LEILAO } from './areas.js';
 import { carregarIndex, carregarUf, carregarHistorico } from './dados.js';
 import { tokenizar, casa, normalizar, indexar, idsQueCasam } from './busca.js';
 
@@ -132,12 +132,13 @@ export default function App() {
 
   const [indice, setIndice] = useState(null);
   // A aba fica no hash para o link poder ser guardado.
-  const [aba, setAba] = useState(() =>
-    window.location.hash === '#concursos' ? 'concursos' : 'licitacoes',
-  );
+  const [aba, setAba] = useState(() => {
+    const h = window.location.hash.replace('#', '');
+    return ['concursos', 'leiloes'].includes(h) ? h : 'licitacoes';
+  });
 
   useEffect(() => {
-    window.location.hash = aba === 'concursos' ? '#concursos' : '';
+    window.location.hash = aba === 'licitacoes' ? '' : `#${aba}`;
   }, [aba]);
 
   useEffect(() => {
@@ -276,6 +277,10 @@ export default function App() {
 
     const filtradas = licitacoes
       .filter((item) => {
+        // Leilões são um recorte da mesma base: o que muda é o significado do
+        // valor (lance mínimo, não estimativa) e os rótulos da tela.
+        const ehLeilao = MODALIDADES_LEILAO.includes(item.modalidade_id);
+        if (aba === 'leiloes' ? !ehLeilao : ehLeilao) return false;
         // A busca por texto vem primeiro: é o filtro mais seletivo (uma consulta
         // ao índice já reduziu 13.928 a dezenas), e sair aqui evita rodar os
         // outros doze testes em cada edital descartado.
@@ -334,7 +339,7 @@ export default function App() {
       const r = cmp(a, b);
       return ordem.desc ? -r : r;
     });
-  }, [licitacoes, filtros, triagem, ordem, incluirAdiado, indiceBusca]);
+  }, [licitacoes, filtros, triagem, ordem, incluirAdiado, indiceBusca, aba]);
 
   const filtrosAtivos = useMemo(() => {
     const p = FILTROS_PADRAO;
@@ -380,24 +385,25 @@ export default function App() {
           sx={{ mb: 2, borderBottom: 1, borderColor: 'divider' }}
         >
           <Tab label="Licitações" value="licitacoes" sx={{ minHeight: ALVO_TOQUE }} />
+          <Tab label="Leilões" value="leiloes" sx={{ minHeight: ALVO_TOQUE }} />
           <Tab label="Concursos" value="concursos" sx={{ minHeight: ALVO_TOQUE }} />
         </Tabs>
 
         <Box id="conteudo">
           {aba === 'concursos' && <Concursos />}
 
-          {aba === 'licitacoes' && status === 'carregando' && (
+          {aba !== 'concursos' && status === 'carregando' && (
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, py: 4 }}>
               <CircularProgress aria-hidden="true" />
               <Typography>Carregando dados…</Typography>
             </Box>
           )}
 
-          {aba === 'licitacoes' && status === 'erro' && (
+          {aba !== 'concursos' && status === 'erro' && (
             <Alert severity="info">Nenhuma coleta ainda — rode o coletor.</Alert>
           )}
 
-          {aba === 'licitacoes' && status === 'ok' && (
+          {aba !== 'concursos' && status === 'ok' && (
             <>
               {/* Coleta parcial precisa aparecer: sem isso a ausência de uma
                   modalidade inteira passa por "não há licitações hoje". */}
@@ -500,7 +506,9 @@ export default function App() {
 
               <Box aria-live="polite" sx={{ mb: 1 }}>
                 <Typography variant="body2" color="text.secondary">
-                  {`${linhas.length} licitaç${linhas.length === 1 ? 'ão' : 'ões'}`}
+                  {aba === 'leiloes'
+                    ? `${linhas.length} leil${linhas.length === 1 ? 'ão' : 'ões'}`
+                    : `${linhas.length} licitaç${linhas.length === 1 ? 'ão' : 'ões'}`}
                   {carregandoUfs && ' · carregando as demais UFs…'}
                   {filtros.incluir !== incluirAdiado && ' · buscando…'}
                   {` · coleta de ${indice?.gerado_em?.slice(0, 10) || ''}`}
@@ -514,6 +522,7 @@ export default function App() {
                 <Alert severity="info">Nenhuma licitação corresponde aos filtros atuais.</Alert>
               ) : (
                 <Resultados
+                  leilao={aba === 'leiloes'}
                   rows={linhas}
                   triagem={triagem}
                   setTriagem={setTriagem}
@@ -529,7 +538,7 @@ export default function App() {
 
       {/* Barra de ações do celular: filtro e ordenação ficam embaixo, onde o
           polegar alcança, e não no topo da página. */}
-      {estreito && aba === 'licitacoes' && status === 'ok' && (
+      {estreito && aba !== 'concursos' && status === 'ok' && (
         <Box
           component="nav"
           aria-label="Ações da lista"

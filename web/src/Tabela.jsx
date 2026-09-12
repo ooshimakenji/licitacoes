@@ -62,7 +62,7 @@ const CABECALHOS = [
   { id: 'triagem', label: 'Triagem', ordenavel: false, largura: 124 },
 ];
 
-export default function Tabela({ rows, triagem, setTriagem, ordem, setOrdem, objetoCompleto }) {
+export default function Tabela({ rows, triagem, setTriagem, ordem, setOrdem, objetoCompleto, leilao }) {
   const [pagina, setPagina] = useState(0);
   const [porPagina, setPorPagina] = useState(25);
   const [aberta, setAberta] = useState(null);
@@ -105,7 +105,8 @@ export default function Tabela({ rows, triagem, setTriagem, ordem, setOrdem, obj
                     direction={ordem.coluna === c.id && ordem.desc ? 'desc' : 'asc'}
                     onClick={() => ordenarPor(c.id)}
                   >
-                    {c.label}
+                    {/* Em leilão o valor é lance mínimo, não estimativa. */}
+                    {c.id === 'valor' && leilao ? 'Lance mínimo' : c.label}
                   </TableSortLabel>
                 </TableCell>
               ) : (
