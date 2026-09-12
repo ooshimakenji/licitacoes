@@ -30,17 +30,21 @@ async function buscar(arquivo) {
 
 export const carregarIndex = () => buscar('index.json');
 
-/// Editais com proposta aberta — o que a tela mostra por padrão. Uma UF sem
-/// arquivo (nenhum edital hoje) não pode derrubar as outras.
-export async function carregarUfs(ufs) {
-  const partes = await Promise.all(
-    ufs.map((uf) =>
-      buscar(`abertos/${uf}.json.gz`)
-        .then((d) => d.licitacoes || [])
-        .catch(() => []),
-    ),
-  );
-  return partes.flat();
+/// Uma UF de cada vez, para a tela mostrar o que já chegou em vez de esperar
+/// todas. Uma UF sem arquivo (nenhum edital hoje) devolve lista vazia sem
+/// derrubar as demais.
+export function carregarUf(uf) {
+  return buscar(`abertos/${uf}.json.gz`)
+    .then((d) => d.licitacoes || [])
+    .catch(() => []);
+}
+
+/// Concursos cabem num arquivo só: 547 do país inteiro em 30 KB comprimidos —
+/// não justifica partição nem tela de seleção.
+export function carregarConcursos() {
+  return buscar('concursos.json.gz')
+    .then((d) => d.concursos || [])
+    .catch(() => []);
 }
 
 /// Histórico: tudo que foi publicado naquele mês, aberto ou não. É o que enxerga

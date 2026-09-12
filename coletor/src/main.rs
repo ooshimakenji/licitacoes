@@ -1,3 +1,4 @@
+use coletor::concursos;
 use coletor::itens;
 use coletor::merge;
 use coletor::pncp::{self, ItemResumo, Licitacao};
@@ -109,6 +110,13 @@ struct ArquivoUf {
     gerado_em: String,
     #[serde(default)]
     licitacoes: Vec<Licitacao>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ArquivoConcursos {
+    gerado_em: String,
+    #[serde(default)]
+    concursos: Vec<concursos::Concurso>,
 }
 
 /// `index.json`: o que a tela lê primeiro para saber o que existe antes de
@@ -675,6 +683,12 @@ fn executar() -> Result<(), Box<dyn Error>> {
     let so_enriquecer = modo == "enriquecer";
     let so_coletar = modo == "coletar";
 
+    // Concursos não têm PNCP: a fonte é outra e o ciclo é curto (6 páginas),
+    // então roda em execução própria.
+    if modo == "concursos" {
+        return coletar_concursos(&config, &raiz);
+    }
+
     // Backfill roda sozinho e só mexe no histórico: pega um mês inteiro de
     // publicações e anexa ao arquivo daquele mês.
     if modo == "backfill" {
@@ -775,6 +789,40 @@ fn executar() -> Result<(), Box<dyn Error>> {
         anexar_mes(&dir_saida, publicados, &gerado_em)?;
     }
 
+    Ok(())
+}
+
+/// Radar de concursos. Grava um arquivo só: são ~35 KB comprimidos, o que não
+/// justifica partição nenhuma.
+fn coletar_concursos(config: &Config, raiz: &Path) -> Result<(), Box<dyn Error>> {
+    let dir = raiz.join(&config.saida_dir);
+    fs::create_dir_all(&dir)?;
+    let caminho = dir.join("concursos.json.gz");
+
+    let novos = concursos::buscar()?;
+    eprintln!("concursos encontrados: {}", novos.len());
+
+    let anteriores: Vec<concursos::Concurso> = if caminho.exists() {
+        ler_gz::<ArquivoConcursos>(&caminho)?.concursos
+    } else {
+        Vec::new()
+    };
+
+    let hoje = time::OffsetDateTime::now_utc()
+        .date()
+        .format(time::macros::format_description!("[year]-[month]-[day]"))?;
+    let gerado_em =
+        time::OffsetDateTime::now_utc().format(&time::format_description::well_known::Rfc3339)?;
+
+    let mut lista = concursos::merge(novos, &anteriores, &hoje);
+    lista.sort_by(|a, b| a.inscricoes.cmp(&b.inscricoes));
+    let novos_hoje = lista.iter().filter(|c| c.visto == hoje).count();
+
+    let bytes = gravar_gz(
+        &caminho,
+        &ArquivoConcursos { gerado_em, concursos: lista },
+    )?;
+    eprintln!("gravados: {bytes} B ({novos_hoje} novos desde a última coleta)");
     Ok(())
 }
 

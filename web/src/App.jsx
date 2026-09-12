@@ -11,6 +11,8 @@ import {
   Menu,
   MenuItem,
   Badge,
+  Tabs,
+  Tab,
   useMediaQuery,
   useTheme,
   Link as MuiLink,
@@ -19,13 +21,15 @@ import TuneIcon from '@mui/icons-material/Tune';
 import SwapVertIcon from '@mui/icons-material/SwapVert';
 import Filtros from './Filtros.jsx';
 import Resultados from './Resultados.jsx';
+import Concursos from './Concursos.jsx';
 import { ALVO_TOQUE } from './theme.js';
 import { AREAS, UF_PARA_REGIAO } from './areas.js';
-import { carregarIndex, carregarUfs, carregarHistorico } from './dados.js';
+import { carregarIndex, carregarUf, carregarHistorico } from './dados.js';
 
 const FILTROS_KEY = 'licitacoes:filtros';
 const TRIAGEM_KEY = 'licitacoes:triagem';
 const BUSCAS_KEY = 'licitacoes:buscas';
+const UF_RECENTE_KEY = 'licitacoes:uf-recente';
 
 const FILTROS_PADRAO = {
   areas: [],
@@ -128,6 +132,14 @@ export default function App() {
   const estreito = useMediaQuery(tema.breakpoints.down('md'));
 
   const [indice, setIndice] = useState(null);
+  // A aba fica no hash para o link poder ser guardado.
+  const [aba, setAba] = useState(() =>
+    window.location.hash === '#concursos' ? 'concursos' : 'licitacoes',
+  );
+
+  useEffect(() => {
+    window.location.hash = aba === 'concursos' ? '#concursos' : '';
+  }, [aba]);
 
   useEffect(() => {
     carregarIndex()
@@ -139,50 +151,79 @@ export default function App() {
       .catch(() => setStatus('erro'));
   }, []);
 
-  // As UFs que você filtra são as que a tela baixa: a base inteira passa de
-  // 36 MB, e baixar tudo para depois filtrar era o que travava a tela.
+  // Todas as UFs da coleta, começando pela que você mais usa. Comprimidas elas
+  // somam ~2,3 MB no total, então exigir uma escolha antes de mostrar qualquer
+  // coisa era uma barreira que não protegia nada.
   const ufsParaCarregar = useMemo(() => {
-    const das = new Set(filtros.ufs);
-    if (filtros.regioes.length) {
-      for (const [uf, regiao] of Object.entries(UF_PARA_REGIAO)) {
-        if (filtros.regioes.includes(regiao)) das.add(uf);
-      }
+    const existentes = Object.keys(indice?.por_uf || {});
+    if (!existentes.length) return [];
+
+    const pedidas = new Set(filtros.ufs);
+    for (const [uf, regiao] of Object.entries(UF_PARA_REGIAO)) {
+      if (filtros.regioes.includes(regiao)) pedidas.add(uf);
     }
-    // Só as que existem na coleta, para não pedir arquivo inexistente.
-    const existentes = indice ? Object.keys(indice.por_uf || {}) : [];
-    return [...das].filter((uf) => existentes.includes(uf)).sort();
+
+    // O que você filtrou vem primeiro; depois a última UF usada; depois as
+    // maiores, que é onde está a maior chance de ter o que você procura.
+    const prioridade = (uf) => {
+      if (pedidas.has(uf)) return 0;
+      if (uf === localStorage.getItem(UF_RECENTE_KEY)) return 1;
+      return 2;
+    };
+    return existentes.sort(
+      (a, b) => prioridade(a) - prioridade(b) || (indice.por_uf[b] || 0) - (indice.por_uf[a] || 0),
+    );
   }, [filtros.ufs, filtros.regioes, indice]);
 
+  // Carga progressiva: cada UF que chega entra na tela na hora, em vez de
+  // esperar todas. Acumula por id porque a UF que chega depois não pode
+  // sobrescrever o que você já está lendo.
   useEffect(() => {
-    if (!indice || ufsParaCarregar.length === 0) {
-      setLicitacoes([]);
-      return;
-    }
+    if (!indice || ufsParaCarregar.length === 0) return;
     let cancelado = false;
+    setLicitacoes([]);
     setCarregandoUfs(true);
 
-    const meses = (indice.meses || []).slice(0, 12);
-    const pedido = filtros.incluirHistorico
-      ? Promise.all([carregarUfs(ufsParaCarregar), carregarHistorico(ufsParaCarregar, meses)])
-      : Promise.all([carregarUfs(ufsParaCarregar), Promise.resolve([])]);
-
-    pedido
-      .then(([abertos, historico]) => {
+    (async () => {
+      for (const uf of ufsParaCarregar) {
+        const lics = await carregarUf(uf);
         if (cancelado) return;
-        // O mesmo edital está no arquivo de abertos E no mês em que foi
-        // publicado. Sem deduplicar por id, ligar o histórico mostraria tudo
-        // duas vezes — e o de `abertos` é o que tem itens e enriquecimento.
-        const porId = new Map(historico.map((l) => [l.id, l]));
-        for (const l of abertos) porId.set(l.id, l);
-        setLicitacoes([...porId.values()]);
-      })
-      .finally(() => {
-        if (!cancelado) setCarregandoUfs(false);
-      });
+        setLicitacoes((anterior) => {
+          const porId = new Map(anterior.map((l) => [l.id, l]));
+          for (const l of lics) porId.set(l.id, l);
+          return [...porId.values()];
+        });
+      }
+
+      if (filtros.incluirHistorico) {
+        const meses = (indice.meses || []).slice(0, 12);
+        const historico = await carregarHistorico(ufsParaCarregar, meses);
+        if (cancelado) return;
+        setLicitacoes((anterior) => {
+          // O aberto vence o histórico: é o registro com itens e enriquecimento.
+          const porId = new Map(historico.map((l) => [l.id, l]));
+          for (const l of anterior) porId.set(l.id, l);
+          return [...porId.values()];
+        });
+      }
+      if (!cancelado) setCarregandoUfs(false);
+    })();
+
     return () => {
       cancelado = true;
     };
   }, [indice, ufsParaCarregar, filtros.incluirHistorico]);
+
+  // Lembra a UF que você mais filtra, para ela vir primeiro na próxima visita.
+  useEffect(() => {
+    if (filtros.ufs.length === 1) {
+      try {
+        localStorage.setItem(UF_RECENTE_KEY, filtros.ufs[0]);
+      } catch {
+        /* sem persistência nesta sessão */
+      }
+    }
+  }, [filtros.ufs]);
 
   useEffect(() => gravarLocalStorage(FILTROS_KEY, filtros), [filtros]);
   useEffect(() => gravarLocalStorage(TRIAGEM_KEY, triagem), [triagem]);
@@ -308,23 +349,34 @@ export default function App() {
       </MuiLink>
 
       <Container maxWidth="xl" sx={{ py: 3 }}>
-        <Typography variant="h1" sx={{ fontSize: { xs: '1.25rem', md: '1.75rem' }, mb: { xs: 1, md: 2 } }}>
-          Painel de licitações
+        <Typography variant="h1" sx={{ fontSize: { xs: '1.25rem', md: '1.75rem' }, mb: { xs: 0.5, md: 1 } }}>
+          Radar público
         </Typography>
 
+        <Tabs
+          value={aba}
+          onChange={(_, v) => setAba(v)}
+          sx={{ mb: 2, borderBottom: 1, borderColor: 'divider' }}
+        >
+          <Tab label="Licitações" value="licitacoes" sx={{ minHeight: ALVO_TOQUE }} />
+          <Tab label="Concursos" value="concursos" sx={{ minHeight: ALVO_TOQUE }} />
+        </Tabs>
+
         <Box id="conteudo">
-          {status === 'carregando' && (
+          {aba === 'concursos' && <Concursos />}
+
+          {aba === 'licitacoes' && status === 'carregando' && (
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, py: 4 }}>
               <CircularProgress aria-hidden="true" />
               <Typography>Carregando dados…</Typography>
             </Box>
           )}
 
-          {status === 'erro' && (
+          {aba === 'licitacoes' && status === 'erro' && (
             <Alert severity="info">Nenhuma coleta ainda — rode o coletor.</Alert>
           )}
 
-          {status === 'ok' && (
+          {aba === 'licitacoes' && status === 'ok' && (
             <>
               {/* Coleta parcial precisa aparecer: sem isso a ausência de uma
                   modalidade inteira passa por "não há licitações hoje". */}
@@ -405,38 +457,16 @@ export default function App() {
 
               <Box aria-live="polite" sx={{ mb: 1 }}>
                 <Typography variant="body2" color="text.secondary">
-                  {carregandoUfs
-                    ? `Baixando ${ufsParaCarregar.join(', ')}…`
-                    : ufsParaCarregar.length === 0
-                      ? `${indice?.total?.toLocaleString('pt-BR')} editais na coleta de ${indice?.gerado_em?.slice(0, 10)}`
-                      : `${linhas.length} licitaç${linhas.length === 1 ? 'ão' : 'ões'} em ${ufsParaCarregar.join(', ')} · coleta de ${indice?.gerado_em?.slice(0, 10)}`}
+                  {`${linhas.length} licitaç${linhas.length === 1 ? 'ão' : 'ões'}`}
+                  {carregandoUfs && ' · carregando as demais UFs…'}
+                  {` · coleta de ${indice?.gerado_em?.slice(0, 10) || ''}`}
                   <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>
                     {' · '}dados do PNCP; confirme sempre no edital antes de decidir
                   </Box>
                 </Typography>
               </Box>
 
-              {/* A base inteira passa de 36 MB: a tela baixa só as UFs que você
-                  filtra, então sem escolha não há o que mostrar. */}
-              {ufsParaCarregar.length === 0 ? (
-                <Alert severity="info" sx={{ mb: 2 }}>
-                  Escolha uma <strong>UF</strong> ou uma <strong>região</strong> nos filtros para
-                  carregar os editais — a base nacional é grande demais para baixar de uma vez.
-                  <Box sx={{ mt: 1, display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-                    {Object.entries(indice?.por_uf || {})
-                      .sort((a, b) => b[1] - a[1])
-                      .slice(0, 8)
-                      .map(([uf, n]) => (
-                        <Chip
-                          key={uf}
-                          label={`${uf} (${n.toLocaleString('pt-BR')})`}
-                          onClick={() => setFiltros((f) => ({ ...f, ufs: [...f.ufs, uf] }))}
-                          sx={{ minHeight: 44 }}
-                        />
-                      ))}
-                  </Box>
-                </Alert>
-              ) : linhas.length === 0 && !carregandoUfs ? (
+              {linhas.length === 0 && !carregandoUfs ? (
                 <Alert severity="info">Nenhuma licitação corresponde aos filtros atuais.</Alert>
               ) : (
                 <Resultados
@@ -455,7 +485,7 @@ export default function App() {
 
       {/* Barra de ações do celular: filtro e ordenação ficam embaixo, onde o
           polegar alcança, e não no topo da página. */}
-      {estreito && status === 'ok' && (
+      {estreito && aba === 'licitacoes' && status === 'ok' && (
         <Box
           component="nav"
           aria-label="Ações da lista"
