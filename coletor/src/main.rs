@@ -133,14 +133,6 @@ struct Index {
     meses: Vec<String>,
 }
 
-/// Formato antigo (arquivo único). Existe só para a primeira execução
-/// particionada não perder o que já foi coletado e enriquecido.
-#[derive(Debug, Deserialize)]
-struct SaidaLegado {
-    #[serde(default)]
-    licitacoes: Vec<Licitacao>,
-}
-
 fn main() {
     if let Err(e) = executar() {
         eprintln!("erro: {e}");
@@ -846,7 +838,7 @@ fn backfill(config: &Config, raiz: &Path, mes: &str) -> Result<(), Box<dyn Error
     let m: u8 = m.parse()?;
     let primeiro = time::Date::from_calendar_date(ano, time::Month::try_from(m)?, 1)?;
     let ultimo = primeiro
-        .replace_day(time::util::days_in_year_month(ano, time::Month::try_from(m)?))?;
+        .replace_day(time::Month::try_from(m)?.length(ano))?;
 
     eprintln!("backfill de {mes}: {primeiro} a {ultimo}");
     let (publicados, falhas) = pncp::buscar_publicados(
