@@ -19,8 +19,9 @@ concurrency:
 jobs:
   coletar:
     runs-on: ubuntu-latest
-    # Seis páginas com 2s entre elas.
-    timeout-minutes: 15
+    # Seis páginas de listagem + o detalhe de cada concurso novo (1 request
+    # com 1,2s de intervalo): a primeira carga dos 547 leva ~14 min.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 

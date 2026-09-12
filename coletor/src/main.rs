@@ -815,14 +815,24 @@ fn coletar_concursos(config: &Config, raiz: &Path) -> Result<(), Box<dyn Error>>
         time::OffsetDateTime::now_utc().format(&time::format_description::well_known::Rfc3339)?;
 
     let mut lista = concursos::merge(novos, &anteriores, &hoje);
+
+    // Detalhe: um request por concurso, só para quem ainda não tem. O merge
+    // acima preserva o de ontem, então isso é incremental.
+    if config.enriquecer {
+        concursos::detalhar(&mut lista, config.enriquecer_max);
+    }
+
     lista.sort_by(|a, b| a.inscricoes.cmp(&b.inscricoes));
     let novos_hoje = lista.iter().filter(|c| c.visto == hoje).count();
+    let sem_detalhe = lista.iter().filter(|c| !c.detalhado).count();
 
     let bytes = gravar_gz(
         &caminho,
         &ArquivoConcursos { gerado_em, concursos: lista },
     )?;
-    eprintln!("gravados: {bytes} B ({novos_hoje} novos desde a última coleta)");
+    eprintln!(
+        "gravados: {bytes} B ({novos_hoje} novos, {sem_detalhe} ainda sem detalhe)"
+    );
     Ok(())
 }
 
