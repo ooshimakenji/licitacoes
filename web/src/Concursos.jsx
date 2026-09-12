@@ -18,6 +18,7 @@ import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import CancelIcon from '@mui/icons-material/Cancel';
 import { carregarConcursos } from './dados.js';
+import { tokenizar, casa } from './busca.js';
 import { MONO, ALVO_TOQUE } from './theme.js';
 import { NOMES_REGIOES, UF_PARA_REGIAO } from './areas.js';
 
@@ -51,9 +52,6 @@ function ler(chave, padrao) {
     return padrao;
   }
 }
-
-const normalizar = (s) =>
-  (s || '').normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase();
 
 /// Dias até o fim das inscrições. O site escreve "21/09/2026" ou "14 a 28/09/2026"
 /// — o que importa é sempre a última data do texto.
@@ -92,9 +90,15 @@ export default function Concursos() {
     [lista],
   );
 
+  const tokensPorId = useMemo(() => {
+    const mapa = new Map();
+    for (const c of lista || []) mapa.set(c.id, tokenizar(`${c.orgao} ${c.cargos}`));
+    return mapa;
+  }, [lista]);
+
   const filtrados = useMemo(() => {
     if (!lista) return [];
-    const busca = normalizar(filtros.busca);
+    const alvos = tokenizar(filtros.busca);
     const salarioMin = filtros.salarioMin === '' ? null : Number(filtros.salarioMin);
 
     return lista
@@ -106,7 +110,7 @@ export default function Concursos() {
         if (salarioMin != null && (c.salario_ate || 0) < salarioMin) return false;
         // Cadastro de reserva não garante vaga: quem quer nomeação filtra fora.
         if (filtros.soComVagas && /cadastro/i.test(c.vagas)) return false;
-        if (busca && !normalizar(`${c.orgao} ${c.cargos}`).includes(busca)) return false;
+        if (alvos.length && !casa(tokensPorId.get(c.id) || [], alvos)) return false;
         if (filtros.ocultarDescartados && triagem[c.id] === 'descartei') return false;
         return true;
       })
@@ -118,7 +122,7 @@ export default function Concursos() {
         if (fimA !== fimB) return fimA ? 1 : -1;
         return (a.dias ?? 9999) - (b.dias ?? 9999);
       });
-  }, [lista, filtros, triagem]);
+  }, [lista, filtros, triagem, tokensPorId]);
 
   if (lista === null) {
     return (

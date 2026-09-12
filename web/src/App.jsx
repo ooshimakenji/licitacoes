@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useDeferredValue, useEffect, useMemo, useState } from 'react';
 import {
   Container,
   Typography,
@@ -25,6 +25,7 @@ import Concursos from './Concursos.jsx';
 import { ALVO_TOQUE } from './theme.js';
 import { AREAS, UF_PARA_REGIAO } from './areas.js';
 import { carregarIndex, carregarUf, carregarHistorico } from './dados.js';
+import { tokenizar, casa, normalizar, indexar, idsQueCasam } from './busca.js';
 
 const FILTROS_KEY = 'licitacoes:filtros';
 const TRIAGEM_KEY = 'licitacoes:triagem';
@@ -73,9 +74,6 @@ function gravarLocalStorage(chave, valor) {
     /* não persistido nesta sessão — não vale quebrar a tela */
   }
 }
-
-const normalizar = (s) =>
-  s.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase();
 
 const listaChaves = (s) =>
   s.split(',').map((k) => normalizar(k.trim())).filter(Boolean);
@@ -247,11 +245,29 @@ export default function App() {
     [licitacoes],
   );
 
+  // Índice invertido (prefixo -> ids), construído uma vez por lista. Varrer os
+  // 13.928 editais a cada tecla dava 566 ms no pior frame — medido no browser.
+  const indiceBusca = useMemo(
+    () => indexar(licitacoes, (l) => l.id, (l) => l.objeto),
+    [licitacoes],
+  );
+
+  // A digitação não espera o filtro: o React mantém a tela responsiva e aplica
+  // o resultado quando fica pronto.
+  const incluirAdiado = useDeferredValue(filtros.incluir);
+
   const linhas = useMemo(() => {
-    const incluirChaves = listaChaves(filtros.incluir);
+    const incluirChaves = listaChaves(incluirAdiado);
     const excluirChaves = listaChaves(filtros.excluir);
     // Palavras das áreas selecionadas: somam-se às suas, não as substituem.
     const areaChaves = filtros.areas.flatMap((a) => listaChaves(AREAS[a] || ''));
+    // Uma consulta ao índice resolve todos os editais de uma vez.
+    const idsBusca = incluirChaves.length
+      ? incluirChaves.reduce((acc, frase) => {
+          const ids = idsQueCasam(indiceBusca, frase) || new Set();
+          return acc === null ? ids : new Set([...acc, ...ids]);
+        }, null)
+      : null;
     const temFiltroValor = filtros.valorMin !== '' || filtros.valorMax !== '';
     const min = filtros.valorMin === '' ? null : Number(filtros.valorMin);
     const max = filtros.valorMax === '' ? null : Number(filtros.valorMax);
@@ -259,6 +275,10 @@ export default function App() {
 
     const filtradas = licitacoes
       .filter((item) => {
+        // A busca por texto vem primeiro: é o filtro mais seletivo (uma consulta
+        // ao índice já reduziu 13.928 a dezenas), e sair aqui evita rodar os
+        // outros doze testes em cada edital descartado.
+        if (idsBusca && !idsBusca.has(item.id)) return false;
         if (filtros.ufs.length && !filtros.ufs.includes(item.uf)) return false;
         if (filtros.regioes.length && !filtros.regioes.includes(UF_PARA_REGIAO[item.uf]))
           return false;
@@ -289,8 +309,8 @@ export default function App() {
 
         const objeto = normalizar(item.objeto || '');
         if (areaChaves.length && !areaChaves.some((k) => objeto.includes(k))) return false;
-        if (incluirChaves.length && !incluirChaves.some((k) => objeto.includes(k))) return false;
         if (excluirChaves.length && excluirChaves.some((k) => objeto.includes(k))) return false;
+
 
         const dias = diasAte(item.encerramento);
         if (diasMax != null && (dias == null || dias > diasMax)) return false;
@@ -313,7 +333,7 @@ export default function App() {
       const r = cmp(a, b);
       return ordem.desc ? -r : r;
     });
-  }, [licitacoes, filtros, triagem, ordem]);
+  }, [licitacoes, filtros, triagem, ordem, incluirAdiado, indiceBusca]);
 
   const filtrosAtivos = useMemo(() => {
     const p = FILTROS_PADRAO;
@@ -459,6 +479,7 @@ export default function App() {
                 <Typography variant="body2" color="text.secondary">
                   {`${linhas.length} licitaç${linhas.length === 1 ? 'ão' : 'ões'}`}
                   {carregandoUfs && ' · carregando as demais UFs…'}
+                  {filtros.incluir !== incluirAdiado && ' · buscando…'}
                   {` · coleta de ${indice?.gerado_em?.slice(0, 10) || ''}`}
                   <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>
                     {' · '}dados do PNCP; confirme sempre no edital antes de decidir
