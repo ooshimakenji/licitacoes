@@ -13,8 +13,11 @@ import {
   TextField,
   Typography,
   Autocomplete,
+  Collapse,
 } from '@mui/material';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
+import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
+import KeyboardArrowUpIcon from '@mui/icons-material/KeyboardArrowUp';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import CancelIcon from '@mui/icons-material/Cancel';
 import { carregarConcursos } from './dados.js';
@@ -40,6 +43,7 @@ const PADRAO = {
   niveis: [],
   salarioMin: '',
   soComVagas: false,
+  semTaxa: false,
   busca: '',
   ocultarDescartados: true,
 };
@@ -110,6 +114,8 @@ export default function Concursos() {
         if (salarioMin != null && (c.salario_ate || 0) < salarioMin) return false;
         // Cadastro de reserva não garante vaga: quem quer nomeação filtra fora.
         if (filtros.soComVagas && /cadastro/i.test(c.vagas)) return false;
+        // Quem procura concurso sem custo de inscrição.
+        if (filtros.semTaxa && c.taxa) return false;
         if (alvos.length && !casa(tokensPorId.get(c.id) || [], alvos)) return false;
         if (filtros.ocultarDescartados && triagem[c.id] === 'descartei') return false;
         return true;
@@ -212,6 +218,15 @@ export default function Concursos() {
             <FormControlLabel
               control={
                 <Checkbox
+                  checked={filtros.semTaxa}
+                  onChange={(e) => set('semTaxa')(e.target.checked)}
+                />
+              }
+              label="Sem taxa informada"
+            />
+            <FormControlLabel
+              control={
+                <Checkbox
                   checked={filtros.ocultarDescartados}
                   onChange={(e) => set('ocultarDescartados')(e.target.checked)}
                 />
@@ -273,8 +288,11 @@ function guia(dias) {
 }
 
 function Card({ c, dias, estado, setTriagem }) {
+  const [aberto, setAberto] = useState(false);
   const g = guia(dias);
   const reserva = /cadastro/i.test(c.vagas);
+  // Só há o que expandir se o detalhe já foi coletado.
+  const temDetalhe = c.taxa || c.periodo || c.tipo_prova || c.cargos_detalhe;
 
   return (
     <Paper component="li" variant="outlined" sx={{ overflow: 'hidden' }}>
@@ -314,6 +332,13 @@ function Card({ c, dias, estado, setTriagem }) {
           <Typography variant="caption" color="text.secondary" component="div" sx={{ mt: 0.25 }}>
             {c.vagas} · {c.cargos}
           </Typography>
+          {c.taxa && (
+            <Typography variant="caption" color="text.secondary" component="div">
+              {/* Só o valor: a frase inteira fica na linha expandida. */}
+              Taxa {c.taxa.match(/R\$ ?[\d.,]+/)?.[0] || ''}
+              {/R\$ ?[\d.,]+.*R\$ ?[\d.,]+/.test(c.taxa) ? ' +' : ''}
+            </Typography>
+          )}
           <Stack direction="row" spacing={0.5} sx={{ mt: 1, flexWrap: 'wrap', gap: 0.5 }}>
             {reserva && <Chip label="Cadastro de reserva" size="small" variant="outlined" />}
             {c.escolaridade?.map((n) => (
@@ -359,6 +384,17 @@ function Card({ c, dias, estado, setTriagem }) {
         >
           Descartar
         </Button>
+        {temDetalhe && (
+          <Button
+            onClick={() => setAberto((a) => !a)}
+            aria-expanded={aberto}
+            aria-controls={`detalhe-${c.id}`}
+            endIcon={aberto ? <KeyboardArrowUpIcon /> : <KeyboardArrowDownIcon />}
+            sx={{ minHeight: ALVO_TOQUE }}
+          >
+            Detalhes
+          </Button>
+        )}
         <Box sx={{ flex: 1 }} />
         <Link
           href={c.link}
@@ -369,6 +405,48 @@ function Card({ c, dias, estado, setTriagem }) {
           Ver edital <OpenInNewIcon fontSize="inherit" aria-hidden="true" />
         </Link>
       </Box>
+
+      <Collapse in={aberto} timeout="auto" unmountOnExit>
+        <Box
+          id={`detalhe-${c.id}`}
+          sx={{ px: 1.5, py: 2, borderTop: '1px solid', borderColor: 'divider' }}
+        >
+          <Box
+            sx={{
+              display: 'grid',
+              gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' },
+              gap: 1.5,
+              mb: 2,
+            }}
+          >
+            <Campo rotulo="Inscrições" valor={c.periodo} />
+            <Campo rotulo="Taxa" valor={c.taxa} />
+            <Campo rotulo="Prova" valor={c.tipo_prova} />
+            <Campo rotulo="Data da prova" valor={c.data_prova} />
+            <Campo rotulo="Organizadora" valor={c.banca} />
+          </Box>
+          <Campo rotulo="Cargos" valor={c.cargos_detalhe} />
+          {c.resumo && (
+            <Typography variant="body2" color="text.secondary" sx={{ mt: 2 }}>
+              {c.resumo}
+            </Typography>
+          )}
+        </Box>
+      </Collapse>
     </Paper>
+  );
+}
+
+/// Campo que some quando não há dado — a página de detalhe nem sempre informa
+/// taxa ou banca, e inventar seria pior que omitir.
+function Campo({ rotulo, valor }) {
+  if (!valor) return null;
+  return (
+    <Box>
+      <Typography variant="caption" color="text.secondary" component="div">
+        {rotulo}
+      </Typography>
+      <Typography variant="body2">{valor}</Typography>
+    </Box>
   );
 }

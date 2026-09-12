@@ -230,10 +230,15 @@ fn frase(texto: &str, gatilhos: &[&str], max: usize) -> String {
             continue;
         };
         let resto = &texto[pos..];
+        // Ponto só encerra a frase quando vem seguido de espaço: sem isso,
+        // "pelo site www.fundacao.org.br" era cortado em "pelo site www".
+        let bytes = resto.as_bytes();
         let fim = resto
             .char_indices()
             .take(max)
-            .find(|(_, c)| *c == '.')
+            .find(|(i, c)| {
+                *c == '.' && bytes.get(i + 1).map(|b| *b == b' ').unwrap_or(true)
+            })
             .map(|(i, _)| i)
             .unwrap_or_else(|| {
                 // Sem ponto no trecho: corta em fronteira de caractere, não de
