@@ -2,8 +2,9 @@ name: coleta
 
 on:
   schedule:
-    # 09:00 UTC = 06:00 BRT, dias úteis
-    - cron: "0 9 * * 1-5"
+    # 09:00 UTC = 06:00 BRT. Todo dia, não só dias úteis: dispensa de cidade
+    # pequena abre e fecha em poucos dias, e o fim de semana inteiro era perdido.
+    - cron: "0 9 * * *"
   workflow_dispatch:
 
 permissions:

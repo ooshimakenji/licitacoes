@@ -28,6 +28,15 @@ const SEM_UF: &str = "SEM-UF";
 const ABERTOS: &str = "abertos";
 const ITENS: &str = "itens";
 
+/// Qual etapa acabou de rodar. Define qual data do index é atualizada.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Etapa {
+    Coleta,
+    Enriquecimento,
+    /// Backfill e outras execuções que não devem mexer em nenhuma das datas.
+    Outra,
+}
+
 /// A API do PNCP quer data como AAAAMMDD, sem hífen.
 const FORMATO_API: &[time::format_description::FormatItem] =
     time::macros::format_description!("[year][month][day]");
@@ -121,7 +130,7 @@ struct ArquivoConcursos {
 
 /// `index.json`: o que a tela lê primeiro para saber o que existe antes de
 /// baixar qualquer UF.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 struct Index {
     gerado_em: String,
     avisos: Vec<String>,
@@ -131,6 +140,13 @@ struct Index {
     por_uf: BTreeMap<String, usize>,
     /// Meses de histórico disponíveis, do mais recente para o mais antigo.
     meses: Vec<String>,
+    /// Datas separadas por etapa. Com um `gerado_em` só, qualquer execução
+    /// sobrescrevia a outra — foi por isso que eu não consegui perceber, olhando
+    /// o arquivo, que o enriquecimento nunca havia rodado.
+    #[serde(default)]
+    ultima_coleta: String,
+    #[serde(default)]
+    ultimo_enriquecimento: String,
 }
 
 fn main() {
@@ -234,6 +250,7 @@ fn gravar(
     licitacoes: Vec<Licitacao>,
     avisos: Vec<String>,
     gerado_em: &str,
+    etapa: Etapa,
 ) -> Result<(), Box<dyn Error>> {
     let dir_abertos = dir.join(ABERTOS);
     fs::create_dir_all(&dir_abertos)?;
@@ -286,7 +303,7 @@ fn gravar(
     }
 
     limpar_layout_antigo(dir)?;
-    gravar_index(dir, gerado_em, total, falta_enriquecer, contagem, avisos)?;
+    gravar_index(dir, gerado_em, total, falta_enriquecer, contagem, avisos, etapa)?;
     eprintln!("gravadas: {total} abertas ({falta_enriquecer} ainda sem enriquecimento)");
     Ok(())
 }
@@ -379,6 +396,7 @@ fn gravar_index(
     falta_enriquecer: usize,
     por_uf: BTreeMap<String, usize>,
     avisos: Vec<String>,
+    etapa: Etapa,
 ) -> Result<(), Box<dyn Error>> {
     // Meses existentes no disco: é o que a tela oferece como histórico.
     let mut meses: Vec<String> = Vec::new();
@@ -399,6 +417,12 @@ fn gravar_index(
     meses.sort();
     meses.reverse();
 
+    // Preserva a data da etapa que NÃO rodou agora.
+    let anterior: Index = fs::read_to_string(dir.join("index.json"))
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_default();
+
     let index = Index {
         gerado_em: gerado_em.to_string(),
         avisos,
@@ -406,6 +430,14 @@ fn gravar_index(
         falta_enriquecer,
         por_uf,
         meses,
+        ultima_coleta: match etapa {
+            Etapa::Coleta => gerado_em.to_string(),
+            _ => anterior.ultima_coleta,
+        },
+        ultimo_enriquecimento: match etapa {
+            Etapa::Enriquecimento => gerado_em.to_string(),
+            _ => anterior.ultimo_enriquecimento,
+        },
     };
     fs::write(dir.join("index.json"), serde_json::to_string(&index)?)?;
     Ok(())
@@ -492,6 +524,7 @@ mod testes {
             vec![lic("a", "SP"), lic("b", "SC"), sem_uf],
             vec!["aviso".to_string()],
             "2026-09-10T00:00:00Z",
+            Etapa::Coleta,
         )
         .expect("deve gravar");
 
@@ -524,7 +557,7 @@ mod testes {
             })
             .collect();
 
-        gravar(&dir, vec![cheia], vec![], "2026-09-10T00:00:00Z").expect("deve gravar");
+        gravar(&dir, vec![cheia], vec![], "2026-09-10T00:00:00Z", Etapa::Coleta).expect("deve gravar");
 
         let devolta = ler_anteriores(&dir).expect("deve ler");
         assert_eq!(devolta[0].itens.len(), MAX_ITENS_GRAVADOS);
@@ -543,14 +576,14 @@ mod testes {
         }];
 
         // 1ª gravação: itens saem para o arquivo separado.
-        gravar(&dir, vec![com_itens], vec![], "2026-09-10T00:00:00Z").unwrap();
+        gravar(&dir, vec![com_itens], vec![], "2026-09-10T00:00:00Z", Etapa::Coleta).unwrap();
         let lido = ler_anteriores(&dir).unwrap();
         assert_eq!(lido[0].itens.len(), 1, "rejoin do arquivo de itens falhou");
 
         // 2ª gravação a partir do que foi lido: é aqui que os itens sumiriam
         // para sempre se o rejoin não existisse — `tipo` já está preenchido,
         // então o registro nunca voltaria para a fila de enriquecimento.
-        gravar(&dir, lido, vec![], "2026-09-11T00:00:00Z").unwrap();
+        gravar(&dir, lido, vec![], "2026-09-11T00:00:00Z", Etapa::Coleta).unwrap();
         let relido = ler_anteriores(&dir).unwrap();
         assert_eq!(relido[0].itens.len(), 1, "itens perdidos na segunda gravação");
         assert_eq!(relido[0].itens[0].descricao, "bota de borracha");
@@ -615,9 +648,47 @@ mod testes {
         assert_eq!(lidos[0].tipo, "Material");
 
         // E a gravação seguinte não deixa os dois layouts convivendo.
-        gravar(&dir, lidos, vec![], "2026-09-11T00:00:00Z").unwrap();
+        gravar(&dir, lidos, vec![], "2026-09-11T00:00:00Z", Etapa::Coleta).unwrap();
         assert!(!dir.join("SP.json").exists(), "layout antigo tem que sair do caminho");
         assert!(dir.join("abertos/SP.json.gz").exists());
+    }
+
+
+    #[test]
+    fn coleta_e_enriquecimento_nao_apagam_a_data_um_do_outro() {
+        let dir = temp("datas");
+
+        // Coleta roda primeiro.
+        gravar(&dir, vec![lic("a", "SP")], vec![], "2026-09-13T08:00:00Z", Etapa::Coleta).unwrap();
+        let idx: Index =
+            serde_json::from_str(&fs::read_to_string(dir.join("index.json")).unwrap()).unwrap();
+        assert_eq!(idx.ultima_coleta, "2026-09-13T08:00:00Z");
+        assert_eq!(idx.ultimo_enriquecimento, "", "enriquecimento ainda não rodou");
+
+        // Depois o enriquecimento, em outra execução.
+        gravar(
+            &dir,
+            vec![lic("a", "SP")],
+            vec![],
+            "2026-09-13T13:00:00Z",
+            Etapa::Enriquecimento,
+        )
+        .unwrap();
+        let idx: Index =
+            serde_json::from_str(&fs::read_to_string(dir.join("index.json")).unwrap()).unwrap();
+
+        // Com um `gerado_em` só, este assert falharia — e foi exatamente por
+        // isso que não deu para perceber, olhando o arquivo, que o
+        // enriquecimento nunca havia rodado.
+        assert_eq!(idx.ultima_coleta, "2026-09-13T08:00:00Z", "a data da coleta foi perdida");
+        assert_eq!(idx.ultimo_enriquecimento, "2026-09-13T13:00:00Z");
+
+        // Backfill não mexe em nenhuma das duas.
+        gravar(&dir, vec![lic("a", "SP")], vec![], "2026-09-13T20:00:00Z", Etapa::Outra).unwrap();
+        let idx: Index =
+            serde_json::from_str(&fs::read_to_string(dir.join("index.json")).unwrap()).unwrap();
+        assert_eq!(idx.ultima_coleta, "2026-09-13T08:00:00Z");
+        assert_eq!(idx.ultimo_enriquecimento, "2026-09-13T13:00:00Z");
     }
 
     #[test]
@@ -756,7 +827,14 @@ fn executar() -> Result<(), Box<dyn Error>> {
 
     let gerado_em =
         time::OffsetDateTime::now_utc().format(&time::format_description::well_known::Rfc3339)?;
-    gravar(&dir_saida, licitacoes, avisos, &gerado_em)?;
+    // O MODO diz qual data avança: no workflow de enriquecimento a coleta não
+    // roda, e vice-versa.
+    let etapa = if so_enriquecer {
+        Etapa::Enriquecimento
+    } else {
+        Etapa::Coleta
+    };
+    gravar(&dir_saida, licitacoes, avisos, &gerado_em, etapa)?;
 
     // Delta diário: é o que enxerga a dispensa de cidade pequena, que abre e
     // fecha entre duas coletas. Medido em MG: 4.395 dispensas publicadas em 30
@@ -860,6 +938,6 @@ fn backfill(config: &Config, raiz: &Path, mes: &str) -> Result<(), Box<dyn Error
 
     // Regrava os abertos sem mudá-los, só para o index passar a listar o mês novo.
     let abertos = ler_anteriores(&dir_saida)?;
-    gravar(&dir_saida, abertos, Vec::new(), &gerado_em)?;
+    gravar(&dir_saida, abertos, Vec::new(), &gerado_em, Etapa::Outra)?;
     Ok(())
 }

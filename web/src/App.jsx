@@ -90,6 +90,16 @@ function diasAte(iso) {
   return Math.round((encDia - hojeDia) / 86400000);
 }
 
+/// Dias desde a última coleta. Mais de 2 significa que o agendamento parou —
+/// foi assim que descobri que o enriquecimento nunca havia rodado, mas só
+/// porque fui olhar por fora. A tela precisa dizer sozinha.
+function diasDesde(iso) {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  return Math.floor((Date.now() - d.getTime()) / 86400000);
+}
+
 function publicadoNasUltimas24h(iso) {
   if (!iso) return false;
   const d = new Date(iso);
@@ -504,6 +514,20 @@ export default function App() {
                 />
               )}
 
+              {diasDesde(indice?.ultima_coleta || indice?.gerado_em) > 2 && (
+                <Alert severity="warning" sx={{ mb: 2 }}>
+                  Dados de {diasDesde(indice?.ultima_coleta || indice?.gerado_em)} dias atrás — a
+                  coleta automática pode ter parado.{' '}
+                  <MuiLink
+                    href="https://github.com/ooshimakenji/licitacoes/actions"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    Ver execuções
+                  </MuiLink>
+                </Alert>
+              )}
+
               <Box aria-live="polite" sx={{ mb: 1 }}>
                 <Typography variant="body2" color="text.secondary">
                   {aba === 'leiloes'
@@ -511,7 +535,12 @@ export default function App() {
                     : `${linhas.length} licitaç${linhas.length === 1 ? 'ão' : 'ões'}`}
                   {carregandoUfs && ' · carregando as demais UFs…'}
                   {filtros.incluir !== incluirAdiado && ' · buscando…'}
-                  {` · coleta de ${indice?.gerado_em?.slice(0, 10) || ''}`}
+                  {` · coleta de ${(indice?.ultima_coleta || indice?.gerado_em || '').slice(0, 10)}`}
+                  {indice?.falta_enriquecer > 0 && (
+                    <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>
+                      {` · ${indice.falta_enriquecer.toLocaleString('pt-BR')} sem classificação de serviço/material ainda`}
+                    </Box>
+                  )}
                   <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>
                     {' · '}dados do PNCP; confirme sempre no edital antes de decidir
                   </Box>

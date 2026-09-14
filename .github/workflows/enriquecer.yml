@@ -2,8 +2,12 @@ name: enriquecer
 
 on:
   schedule:
-    # 13:00 UTC = 10:00 BRT: depois da coleta, para pegar os editais do dia.
-    - cron: "0 13 * * 1-5"
+    # Duas vezes ao dia, todo dia: 13.905 editais na fila com teto de 4.000 por
+    # execução levariam 4 dias em uma passada só.
+    # 11h e 13h UTC = 8h e 10h BRT — de manhã de propósito, porque medi que o
+    # PNCP degrada entre 18h e 23h BRT (500/504 em quase tudo).
+    - cron: "0 11 * * *"
+    - cron: "0 13 * * *"
   workflow_dispatch:
 
 permissions:
