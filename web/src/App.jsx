@@ -26,6 +26,7 @@ import { ALVO_TOQUE } from './theme.js';
 import { AREAS, UF_PARA_REGIAO, MODALIDADES_LEILAO } from './areas.js';
 import { carregarIndex, carregarUf, carregarHistorico } from './dados.js';
 import { tokenizar, casa, normalizar, indexar, idsQueCasam } from './busca.js';
+import { dadosVelhos } from './saude.js';
 
 const FILTROS_KEY = 'licitacoes:filtros';
 const TRIAGEM_KEY = 'licitacoes:triagem';
@@ -88,16 +89,6 @@ function diasAte(iso) {
   const encDia = new Date(enc.getFullYear(), enc.getMonth(), enc.getDate());
   const hojeDia = new Date(hoje.getFullYear(), hoje.getMonth(), hoje.getDate());
   return Math.round((encDia - hojeDia) / 86400000);
-}
-
-/// Dias desde a última coleta. Mais de 2 significa que o agendamento parou —
-/// foi assim que descobri que o enriquecimento nunca havia rodado, mas só
-/// porque fui olhar por fora. A tela precisa dizer sozinha.
-function diasDesde(iso) {
-  if (!iso) return null;
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return null;
-  return Math.floor((Date.now() - d.getTime()) / 86400000);
 }
 
 function publicadoNasUltimas24h(iso) {
@@ -514,10 +505,10 @@ export default function App() {
                 />
               )}
 
-              {diasDesde(indice?.ultima_coleta || indice?.gerado_em) > 2 && (
+              {dadosVelhos(indice) && (
                 <Alert severity="warning" sx={{ mb: 2 }}>
-                  Dados de {diasDesde(indice?.ultima_coleta || indice?.gerado_em)} dias atrás — a
-                  coleta automática pode ter parado.{' '}
+                  Dados de {dadosVelhos(indice)} dias atrás — a coleta automática pode ter
+                  parado.{' '}
                   <MuiLink
                     href="https://github.com/ooshimakenji/licitacoes/actions"
                     target="_blank"
